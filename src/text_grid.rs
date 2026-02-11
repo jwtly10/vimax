@@ -19,14 +19,25 @@ pub struct TextGrid<'a> {
     scroll_y: usize,
     scroll_x: usize,
     selection: Option<(usize, usize)>,
+    search_matches: Vec<usize>,
+    search_len: usize,
 }
 
-pub fn text_grid(buffer: &Buffer, scroll_y: usize, scroll_x: usize, selection: Option<(usize, usize)>) -> Element<'_, crate::app::Message> {
+pub fn text_grid(
+    buffer: &Buffer,
+    scroll_y: usize,
+    scroll_x: usize,
+    selection: Option<(usize, usize)>,
+    search_matches: Vec<usize>,
+    search_len: usize,
+) -> Element<'_, crate::app::Message> {
     Element::new(TextGrid {
         buffer,
         scroll_y,
         scroll_x,
         selection,
+        search_matches,
+        search_len,
     })
 }
 
@@ -204,6 +215,50 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                             },
                             Color::from_rgba(0.3, 0.5, 0.8, 0.4),
                         );
+                    }
+                }
+            }
+
+            // Search match highlights
+            if self.search_len > 0 {
+                let line_start_char = rope.line_to_char(line_idx);
+                let line_end_char = if line_idx + 1 < total_lines {
+                    rope.line_to_char(line_idx + 1)
+                } else {
+                    rope.len_chars()
+                };
+
+                for &match_pos in &self.search_matches {
+                    let match_end = match_pos + self.search_len;
+                    // Check if this match overlaps with the current line
+                    if match_pos < line_end_char && match_end > line_start_char {
+                        let col_start = match_pos.saturating_sub(line_start_char);
+                        let col_end = if match_end < line_end_char {
+                            match_end - line_start_char
+                        } else {
+                            line_end_char - line_start_char
+                        };
+
+                        if col_end > scroll_x {
+                            let draw_start = col_start.saturating_sub(scroll_x);
+                            let draw_end = col_end.saturating_sub(scroll_x);
+                            let text_x = bounds.x + GUTTER_WIDTH + 8.0;
+                            let hl_x = text_x + (draw_start as f32 * CHAR_WIDTH);
+                            let hl_w = (draw_end - draw_start) as f32 * CHAR_WIDTH;
+
+                            renderer.fill_quad(
+                                renderer::Quad {
+                                    bounds: Rectangle {
+                                        x: hl_x,
+                                        y,
+                                        width: hl_w,
+                                        height: LINE_HEIGHT,
+                                    },
+                                    ..renderer::Quad::default()
+                                },
+                                Color::from_rgba(0.9, 0.7, 0.2, 0.3),
+                            );
+                        }
                     }
                 }
             }

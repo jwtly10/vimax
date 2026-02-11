@@ -395,6 +395,105 @@ pub fn cmd_write_quit(app: &mut Remax, _ctx: CommandCtx) -> CommandEffect {
     }
 }
 
+pub fn cmd_clear_search(app: &mut Remax, _ctx: CommandCtx) -> CommandEffect {
+    app.input.search_pattern.clear();
+    app.input.command_display.clear();
+    CommandEffect::None
+}
+
+// Search
+pub fn cmd_enter_search(app: &mut Remax, _ctx: CommandCtx) -> CommandEffect {
+    app.input.search_query.clear();
+    app.input.command_display.clear();
+    app.input.mode = crate::input::VimMode::Search;
+    CommandEffect::None
+}
+
+pub fn cmd_search_next(app: &mut Remax, ctx: CommandCtx) -> CommandEffect {
+    let query = &app.input.search_pattern;
+    if query.is_empty() {
+        return CommandEffect::DisplayMessage(String::from("No search pattern"));
+    }
+    let from = app.buffer.cursor() + 1;
+    for _ in 0..ctx.count {
+        if let Some(pos) = app.buffer.find_next(query, from) {
+            app.buffer.set_cursor(pos);
+        }
+    }
+    let matches = app.buffer.find_all(query);
+    let total = matches.len();
+    let current = matches
+        .iter()
+        .position(|&m| m == app.buffer.cursor())
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    CommandEffect::DisplayMessage(format!("/{} [{}/{}]", query, current, total))
+}
+
+pub fn cmd_search_prev(app: &mut Remax, ctx: CommandCtx) -> CommandEffect {
+    let query = &app.input.search_pattern;
+    if query.is_empty() {
+        return CommandEffect::DisplayMessage(String::from("No search pattern"));
+    }
+    let from = app.buffer.cursor();
+    for _ in 0..ctx.count {
+        if let Some(pos) = app.buffer.find_prev(query, from) {
+            app.buffer.set_cursor(pos);
+        }
+    }
+    let matches = app.buffer.find_all(query);
+    let total = matches.len();
+    let current = matches
+        .iter()
+        .position(|&m| m == app.buffer.cursor())
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    CommandEffect::DisplayMessage(format!("?{} [{}/{}]", query, current, total))
+}
+
+pub fn cmd_replace_char(app: &mut Remax, _ctx: CommandCtx) -> CommandEffect {
+    app.input.pending_replace = true;
+    CommandEffect::None
+}
+
+pub fn cmd_find_char_forward(app: &mut Remax, _ctx: CommandCtx) -> CommandEffect {
+    app.input.pending_find_char = Some((true, false));
+    CommandEffect::None
+}
+
+pub fn cmd_find_char_backward(app: &mut Remax, _ctx: CommandCtx) -> CommandEffect {
+    app.input.pending_find_char = Some((false, false));
+    CommandEffect::None
+}
+
+pub fn cmd_find_char_forward_before(app: &mut Remax, _ctx: CommandCtx) -> CommandEffect {
+    app.input.pending_find_char = Some((true, true));
+    CommandEffect::None
+}
+
+pub fn cmd_find_char_backward_before(app: &mut Remax, _ctx: CommandCtx) -> CommandEffect {
+    app.input.pending_find_char = Some((false, true));
+    CommandEffect::None
+}
+
+pub fn cmd_repeat_find_char(app: &mut Remax, ctx: CommandCtx) -> CommandEffect {
+    if let Some((ch, forward, stop_before)) = app.input.last_find_char {
+        for _ in 0..ctx.count {
+            app.buffer.find_char_on_line(ch, forward, stop_before);
+        }
+    }
+    CommandEffect::None
+}
+
+pub fn cmd_repeat_find_char_reverse(app: &mut Remax, ctx: CommandCtx) -> CommandEffect {
+    if let Some((ch, forward, stop_before)) = app.input.last_find_char {
+        for _ in 0..ctx.count {
+            app.buffer.find_char_on_line(ch, !forward, stop_before);
+        }
+    }
+    CommandEffect::None
+}
+
 /// Register all built-in commands.
 pub fn register_all(registry: &mut ActionRegistry) {
     // Cursor movement
@@ -464,4 +563,21 @@ pub fn register_all(registry: &mut ActionRegistry) {
     registry.register("buffer.quit", cmd_quit);
     registry.register("buffer.force_quit", cmd_force_quit);
     registry.register("buffer.write_quit", cmd_write_quit);
+
+    // Search
+    registry.register("vim.clear_search", cmd_clear_search);
+    registry.register("vim.enter_search", cmd_enter_search);
+    registry.register("search.next", cmd_search_next);
+    registry.register("search.prev", cmd_search_prev);
+
+    // Replace char
+    registry.register("edit.replace_char", cmd_replace_char);
+
+    // Find char motions
+    registry.register("motion.find_char_forward", cmd_find_char_forward);
+    registry.register("motion.find_char_backward", cmd_find_char_backward);
+    registry.register("motion.find_char_forward_before", cmd_find_char_forward_before);
+    registry.register("motion.find_char_backward_before", cmd_find_char_backward_before);
+    registry.register("motion.repeat_find_char", cmd_repeat_find_char);
+    registry.register("motion.repeat_find_char_reverse", cmd_repeat_find_char_reverse);
 }

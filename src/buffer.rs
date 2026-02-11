@@ -585,6 +585,102 @@ impl Buffer {
         (pos, pos)
     }
 
+    pub fn find_all(&self, query: &str) -> Vec<usize> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let text: String = self.rope.chars().collect();
+        let mut matches = Vec::new();
+        let mut start = 0;
+        while let Some(pos) = text[start..].find(query) {
+            matches.push(start + pos);
+            start += pos + 1;
+        }
+        matches
+    }
+
+    pub fn find_next(&self, query: &str, from: usize) -> Option<usize> {
+        let matches = self.find_all(query);
+        if matches.is_empty() {
+            return None;
+        }
+        // Find first match at or after `from`
+        for &m in &matches {
+            if m >= from {
+                return Some(m);
+            }
+        }
+        // Wrap around
+        Some(matches[0])
+    }
+
+    pub fn find_prev(&self, query: &str, from: usize) -> Option<usize> {
+        let matches = self.find_all(query);
+        if matches.is_empty() {
+            return None;
+        }
+        // Find last match before `from`
+        for &m in matches.iter().rev() {
+            if m < from {
+                return Some(m);
+            }
+        }
+        // Wrap around
+        Some(*matches.last().unwrap())
+    }
+
+    pub fn find_char_on_line(&mut self, ch: char, forward: bool, stop_before: bool) -> bool {
+        let (line, col) = self.cursor_position();
+        let line_start = self.rope.line_to_char(line);
+        let line_len = self.line_len_no_newline(line);
+
+        if forward {
+            for i in (col + 1)..line_len {
+                if self.rope.char(line_start + i) == ch {
+                    self.cursor = line_start + if stop_before { i - 1 } else { i };
+                    return true;
+                }
+            }
+        } else {
+            if col == 0 {
+                return false;
+            }
+            for i in (0..col).rev() {
+                if self.rope.char(line_start + i) == ch {
+                    self.cursor = line_start + if stop_before { i + 1 } else { i };
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn replace_char(&mut self, ch: char) {
+        let len = self.rope.len_chars();
+        if self.cursor >= len {
+            return;
+        }
+        let cursor_before = self.cursor;
+        let old: String = self.rope.slice(self.cursor..self.cursor + 1).into();
+        self.rope.remove(self.cursor..self.cursor + 1);
+        self.rope.insert_char(self.cursor, ch);
+        self.modified = true;
+        self.undo_stack.push_edit(
+            EditKind::Delete {
+                pos: self.cursor,
+                text: old,
+            },
+            cursor_before,
+        );
+        self.undo_stack.push_edit(
+            EditKind::Insert {
+                pos: self.cursor,
+                text: ch.to_string(),
+            },
+            cursor_before,
+        );
+    }
+
     /// Saves a known buffer to its file path
     pub fn save(&mut self) -> anyhow::Result<()> {
         if self.read_only {

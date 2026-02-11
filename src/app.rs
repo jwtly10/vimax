@@ -165,6 +165,9 @@ impl Remax {
                         }
                     }
                     VimAction::InsertText(t) => {
+                        if !self.input.search_pattern.is_empty() {
+                            self.input.search_pattern.clear();
+                        }
                         for ch in t.chars() {
                             self.buffer.insert_char(ch);
                         }
@@ -173,6 +176,36 @@ impl Remax {
                         let task = self.execute_ex_command(&cmd);
                         self.ensure_cursor_visible();
                         return task;
+                    }
+                    VimAction::ExecuteSearch(query) => {
+                        if query.is_empty() {
+                            return Task::none();
+                        }
+                        let from = self.buffer.cursor() + 1;
+                        if let Some(pos) = self.buffer.find_next(&query, from) {
+                            self.buffer.set_cursor(pos);
+                        }
+                        let matches = self.buffer.find_all(&query);
+                        let total = matches.len();
+                        let current = matches
+                            .iter()
+                            .position(|&m| m == self.buffer.cursor())
+                            .map(|i| i + 1)
+                            .unwrap_or(0);
+                        self.input.command_display =
+                            format!("/{} [{}/{}]", query, current, total);
+                        self.ensure_cursor_visible();
+                    }
+                    VimAction::SearchUpdated => {}
+                    VimAction::ReplaceChar(ch) => {
+                        self.buffer.replace_char(ch);
+                    }
+                    VimAction::FindChar {
+                        ch,
+                        forward,
+                        stop_before,
+                    } => {
+                        self.buffer.find_char_on_line(ch, forward, stop_before);
                     }
                     VimAction::CommandLineUpdated | VimAction::Pending | VimAction::Unhandled => {}
                 }
@@ -293,6 +326,23 @@ impl Remax {
                 };
                 (line_start, line_end)
             }
+            OperatorRange::FindChar {
+                ch,
+                forward,
+                stop_before,
+            } => {
+                let before = self.buffer.cursor();
+                for _ in 0..count {
+                    self.buffer.find_char_on_line(ch, forward, stop_before);
+                }
+                let after = self.buffer.cursor();
+                if before <= after {
+                    // For forward find, include the target char in the range
+                    (before, after + 1)
+                } else {
+                    (after, before)
+                }
+            }
         };
 
         if start == end {
@@ -350,14 +400,25 @@ impl Remax {
 
         let selection = command::visual_range(self);
 
-        let grid = text_grid::text_grid(&self.buffer, self.scroll_y, self.scroll_x, selection);
+        let search_matches = self.buffer.find_all(&self.input.search_pattern);
+        let search_len = self.input.search_pattern.len();
+        let grid = text_grid::text_grid(
+            &self.buffer,
+            self.scroll_y,
+            self.scroll_x,
+            selection,
+            search_matches,
+            search_len,
+        );
         let mode_label =
             text(format!(" {} ", self.input.mode))
                 .size(14)
                 .color(match self.input.mode {
                     VimMode::Normal => iced::Color::from_rgb(0.6, 0.8, 1.0),
                     VimMode::Insert => iced::Color::from_rgb(0.6, 1.0, 0.6),
-                    VimMode::Command => iced::Color::from_rgb(1.0, 0.8, 0.5),
+                    VimMode::Command | VimMode::Search => {
+                        iced::Color::from_rgb(1.0, 0.8, 0.5)
+                    }
                     VimMode::Visual | VimMode::VisualLine => {
                         iced::Color::from_rgb(0.9, 0.6, 1.0)
                     }
@@ -391,10 +452,10 @@ impl Remax {
         .width(Length::Fill)
         .padding([2, 0]);
 
-        let cmdline_text = if self.input.mode == VimMode::Command {
-            format!(":{}", self.input.command_line)
-        } else {
-            self.input.command_display.clone()
+        let cmdline_text = match self.input.mode {
+            VimMode::Command => format!(":{}", self.input.command_line),
+            VimMode::Search => format!("/{}", self.input.search_query),
+            _ => self.input.command_display.clone(),
         };
 
         let cmdline = container(

@@ -11,6 +11,7 @@ pub enum VimMode {
     Command,
     Visual,
     VisualLine,
+    Search,
 }
 
 impl std::fmt::Display for VimMode {
@@ -21,6 +22,7 @@ impl std::fmt::Display for VimMode {
             VimMode::Command => write!(f, "COMMAND"),
             VimMode::Visual => write!(f, "VISUAL"),
             VimMode::VisualLine => write!(f, "V-LINE"),
+            VimMode::Search => write!(f, "SEARCH"),
         }
     }
 }
@@ -39,6 +41,14 @@ pub enum VimAction {
     InsertText(String),
     ExecuteCommandLine(String),
     CommandLineUpdated,
+    ExecuteSearch(String),
+    SearchUpdated,
+    ReplaceChar(char),
+    FindChar {
+        ch: char,
+        forward: bool,
+        stop_before: bool,
+    },
     Pending,
     Unhandled,
 }
@@ -47,6 +57,11 @@ pub enum OperatorRange {
     Motion { command: CommandId },
     TextObject(TextObject),
     WholeLine,
+    FindChar {
+        ch: char,
+        forward: bool,
+        stop_before: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -110,6 +125,11 @@ pub struct InputState {
     pub command_display: String,
     pub selection_anchor: Option<usize>,
     pub pending_operator: Option<&'static str>,
+    pub search_query: String,
+    pub search_pattern: String,
+    pub pending_replace: bool,
+    pub pending_find_char: Option<(bool, bool)>,
+    pub last_find_char: Option<(char, bool, bool)>,
 }
 
 impl InputState {
@@ -122,6 +142,11 @@ impl InputState {
             command_display: String::new(),
             selection_anchor: None,
             pending_operator: None,
+            search_query: String::new(),
+            search_pattern: String::new(),
+            pending_replace: false,
+            pending_find_char: None,
+            last_find_char: None,
         }
     }
 
@@ -150,6 +175,7 @@ impl InputState {
             VimMode::Visual | VimMode::VisualLine => self.handle_visual(modified_key, mode_keymap),
             VimMode::Insert => self.handle_insert(key, modifiers, mode_keymap, text),
             VimMode::Command => self.handle_command(key, text),
+            VimMode::Search => self.handle_search(key, text),
         }
     }
 
@@ -157,6 +183,30 @@ impl InputState {
         // Ignoring bare modifiers... since I never press both keys at the exact same time
         if is_bare_modifier(key) {
             return VimAction::Pending;
+        }
+
+        if self.pending_replace {
+            self.pending_replace = false;
+            if let keyboard::Key::Character(c) = key
+                && let Some(ch) = c.as_str().chars().next()
+            {
+                return VimAction::ReplaceChar(ch);
+            }
+            return VimAction::Unhandled;
+        }
+
+        if let Some((forward, stop_before)) = self.pending_find_char.take() {
+            if let keyboard::Key::Character(c) = key
+                && let Some(ch) = c.as_str().chars().next()
+            {
+                self.last_find_char = Some((ch, forward, stop_before));
+                return VimAction::FindChar {
+                    ch,
+                    forward,
+                    stop_before,
+                };
+            }
+            return VimAction::Unhandled;
         }
 
         // If operator is pending, handle the motion/text-object/doubled
@@ -220,6 +270,31 @@ impl InputState {
         keymap: &Keymap,
         operator: &'static str,
     ) -> VimAction {
+        if let Some((forward, stop_before)) = self.pending_find_char.take() {
+            if let keyboard::Key::Character(c) = key
+                && let Some(ch) = c.as_str().chars().next()
+            {
+                self.last_find_char = Some((ch, forward, stop_before));
+                let count = self.count_accum.unwrap_or(1);
+                let op = self.pending_operator.take().unwrap();
+                self.pending_keys.clear();
+                self.count_accum = None;
+                return VimAction::OperatorMotion {
+                    operator: op,
+                    range: OperatorRange::FindChar {
+                        ch,
+                        forward,
+                        stop_before,
+                    },
+                    count,
+                };
+            }
+            self.pending_operator = None;
+            self.pending_keys.clear();
+            self.count_accum = None;
+            return VimAction::Unhandled;
+        }
+
         // Check for operator-doubled (dd, cc, yy)
         if let keyboard::Key::Character(c) = key {
             let ch = c.as_str();
@@ -286,6 +361,26 @@ impl InputState {
                     if cmd == "op.delete" || cmd == "op.change" || cmd == "op.yank" {
                         self.pending_operator = None;
                         return VimAction::Unhandled;
+                    }
+
+                    match cmd {
+                        "motion.find_char_forward" => {
+                            self.pending_find_char = Some((true, false));
+                            return VimAction::Pending;
+                        }
+                        "motion.find_char_backward" => {
+                            self.pending_find_char = Some((false, false));
+                            return VimAction::Pending;
+                        }
+                        "motion.find_char_forward_before" => {
+                            self.pending_find_char = Some((true, true));
+                            return VimAction::Pending;
+                        }
+                        "motion.find_char_backward_before" => {
+                            self.pending_find_char = Some((false, true));
+                            return VimAction::Pending;
+                        }
+                        _ => {}
                     }
 
                     let op = self.pending_operator.take().unwrap();
@@ -417,6 +512,45 @@ impl InputState {
             self.count_accum = None;
             VimAction::Unhandled
         }
+    }
+
+    fn handle_search(&mut self, key: &keyboard::Key, text: Option<&str>) -> VimAction {
+        if let keyboard::Key::Named(named) = key {
+            match named {
+                keyboard::key::Named::Escape => {
+                    self.search_query.clear();
+                    self.mode = VimMode::Normal;
+                    return VimAction::SearchUpdated;
+                }
+                keyboard::key::Named::Enter => {
+                    let query = self.search_query.clone();
+                    self.search_pattern = query.clone();
+                    self.mode = VimMode::Normal;
+                    return VimAction::ExecuteSearch(query);
+                }
+                keyboard::key::Named::Backspace => {
+                    if self.search_query.is_empty() {
+                        self.mode = VimMode::Normal;
+                    } else {
+                        self.search_query.pop();
+                    }
+                    return VimAction::SearchUpdated;
+                }
+                keyboard::key::Named::Space => {
+                    // fall through to OS text handling
+                }
+                _ => return VimAction::Unhandled,
+            }
+        }
+
+        if let Some(t) = text {
+            for ch in t.chars() {
+                if !ch.is_control() {
+                    self.search_query.push(ch);
+                }
+            }
+        }
+        VimAction::SearchUpdated
     }
 
     fn handle_command(&mut self, key: &keyboard::Key, text: Option<&str>) -> VimAction {

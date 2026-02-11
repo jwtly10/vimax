@@ -168,7 +168,7 @@ impl Keymaps {
             VimMode::Normal => &self.normal,
             VimMode::Insert => &self.insert,
             VimMode::Visual | VimMode::VisualLine => &self.visual,
-            VimMode::Command => &self.insert, // command mode doesn't use keymap
+            VimMode::Command | VimMode::Search => &self.insert, // command/search mode doesn't use keymap
         }
     }
 }
@@ -251,6 +251,21 @@ pub fn build_normal_keymap() -> Keymap {
     km.bind(vec![KeyPress::char('V')], "vim.enter_visual_line");
     km.bind(vec![KeyPress::char(':')], "vim.enter_command");
 
+    km.bind(
+        vec![KeyPress::named(keyboard::key::Named::Escape)],
+        "vim.clear_search",
+    );
+    km.bind(vec![KeyPress::char('/')], "vim.enter_search");
+    km.bind(vec![KeyPress::char('n')], "search.next");
+    km.bind(vec![KeyPress::char('N')], "search.prev");
+    km.bind(vec![KeyPress::char('r')], "edit.replace_char");
+    km.bind(vec![KeyPress::char('f')], "motion.find_char_forward");
+    km.bind(vec![KeyPress::char('F')], "motion.find_char_backward");
+    km.bind(vec![KeyPress::char('t')], "motion.find_char_forward_before");
+    km.bind(vec![KeyPress::char('T')], "motion.find_char_backward_before");
+    km.bind(vec![KeyPress::char(';')], "motion.repeat_find_char");
+    km.bind(vec![KeyPress::char(',')], "motion.repeat_find_char_reverse");
+
     km
 }
 
@@ -268,6 +283,10 @@ fn build_visual_keymap(normal: &Keymap) -> Keymap {
     km.remove(&[KeyPress::char('I')]);
     km.remove(&[KeyPress::char(':')]);
     km.remove(&[KeyPress::char('u')]);
+    km.remove(&[KeyPress::char('r')]);
+    km.remove(&[KeyPress::char('/')]);
+    km.remove(&[KeyPress::char('n')]);
+    km.remove(&[KeyPress::char('N')]);
 
     km.bind(vec![KeyPress::char('d')], "visual.delete");
     km.bind(vec![KeyPress::char('x')], "visual.delete");
