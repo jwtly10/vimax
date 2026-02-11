@@ -1,0 +1,934 @@
+use iced::keyboard;
+use tracing::{debug, info};
+
+use crate::action::{BufferQuery, EditorAction, Motion, Range};
+
+use super::commands;
+use super::keymap::{CommandId, KeyId, KeyPress, Keymap, KeymapLookup};
+use super::mode::VimMode;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Operator {
+    Delete,
+    Change,
+    Yank,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TextObject {
+    InnerWord,
+    AWord,
+    InnerParen,
+    AParen,
+    InnerSingleQuote,
+    ASingleQuote,
+    InnerAngle,
+    AAngle,
+    InnerDoubleQuote,
+    ADoubleQuote,
+    InnerCurly,
+    ACurly,
+    InnerBracket,
+    ABracket,
+}
+
+fn is_bare_modifier(key: &keyboard::Key) -> bool {
+    matches!(
+        key,
+        keyboard::Key::Named(
+            keyboard::key::Named::Shift
+                | keyboard::key::Named::Control
+                | keyboard::key::Named::Alt
+                | keyboard::key::Named::Super
+                | keyboard::key::Named::Meta
+        )
+    )
+}
+
+fn parse_text_object(modifier: char, obj: char) -> Option<TextObject> {
+    match (modifier, obj) {
+        ('i', 'w') => Some(TextObject::InnerWord),
+        ('a', 'w') => Some(TextObject::AWord),
+        ('i', '(') | ('i', ')') | ('i', 'b') => Some(TextObject::InnerParen),
+        ('a', '(') | ('a', ')') | ('a', 'b') => Some(TextObject::AParen),
+        ('i', '\'') => Some(TextObject::InnerSingleQuote),
+        ('a', '\'') => Some(TextObject::ASingleQuote),
+        ('i', '"') => Some(TextObject::InnerDoubleQuote),
+        ('a', '"') => Some(TextObject::ADoubleQuote),
+        ('i', '<') | ('i', '>') => Some(TextObject::InnerAngle),
+        ('a', '<') | ('a', '>') => Some(TextObject::AAngle),
+        ('i', '{') | ('i', '}') | ('i', 'B') => Some(TextObject::InnerCurly),
+        ('a', '{') | ('a', '}') | ('a', 'B') => Some(TextObject::ACurly),
+        ('i', '[') | ('i', ']') => Some(TextObject::InnerBracket),
+        ('a', '[') | ('a', ']') => Some(TextObject::ABracket),
+        _ => None,
+    }
+}
+
+fn resolve_text_object(buf: &dyn BufferQuery, obj: TextObject) -> (usize, usize) {
+    match obj {
+        TextObject::InnerWord => buf.text_object_inner_word(),
+        TextObject::AWord => buf.text_object_a_word(),
+        TextObject::InnerParen => buf.text_object_delimited('(', ')', false),
+        TextObject::AParen => buf.text_object_delimited('(', ')', true),
+        TextObject::InnerCurly => buf.text_object_delimited('{', '}', false),
+        TextObject::ACurly => buf.text_object_delimited('{', '}', true),
+        TextObject::InnerBracket => buf.text_object_delimited('[', ']', false),
+        TextObject::ABracket => buf.text_object_delimited('[', ']', true),
+        TextObject::InnerAngle => buf.text_object_delimited('<', '>', false),
+        TextObject::AAngle => buf.text_object_delimited('<', '>', true),
+        TextObject::InnerSingleQuote => buf.text_object_quoted('\'', false),
+        TextObject::ASingleQuote => buf.text_object_quoted('\'', true),
+        TextObject::InnerDoubleQuote => buf.text_object_quoted('"', false),
+        TextObject::ADoubleQuote => buf.text_object_quoted('"', true),
+    }
+}
+
+pub struct InputState {
+    pub mode: VimMode,
+    pub selection_anchor: Option<usize>,
+    pub pending_keys: Vec<KeyPress>,
+    pub count_accum: Option<usize>,
+    pub command_line: String,
+    pub pending_operator: Option<Operator>,
+    pub search_query: String,
+    pub pending_replace: bool,
+    pub pending_find_char: Option<(bool, bool)>,
+    pub last_find_char: Option<(char, bool, bool)>,
+}
+
+impl InputState {
+    pub fn new() -> Self {
+        Self {
+            mode: VimMode::Normal,
+            selection_anchor: None,
+            pending_keys: Vec::new(),
+            count_accum: None,
+            command_line: String::new(),
+            pending_operator: None,
+            search_query: String::new(),
+            pending_replace: false,
+            pending_find_char: None,
+            last_find_char: None,
+        }
+    }
+
+    pub fn enter_insert(&mut self) -> Vec<EditorAction> {
+        info!("entering insert mode");
+        self.mode = VimMode::Insert;
+        vec![
+            EditorAction::StartEditGroup,
+            EditorAction::ClearSearch,
+            EditorAction::SetMode("INSERT".to_string()),
+        ]
+    }
+
+    pub fn enter_insert_after(&mut self) -> Vec<EditorAction> {
+        self.mode = VimMode::Insert;
+        vec![
+            EditorAction::StartEditGroup,
+            EditorAction::MoveCursor {
+                motion: Motion::Right,
+                count: 1,
+            },
+            EditorAction::ClearSearch,
+            EditorAction::SetMode("INSERT".to_string()),
+        ]
+    }
+
+    pub fn enter_insert_line_end(&mut self) -> Vec<EditorAction> {
+        self.mode = VimMode::Insert;
+        vec![
+            EditorAction::StartEditGroup,
+            EditorAction::MoveCursor {
+                motion: Motion::LineEnd,
+                count: 1,
+            },
+            EditorAction::ClearSearch,
+            EditorAction::SetMode("INSERT".to_string()),
+        ]
+    }
+
+    pub fn enter_insert_line_start(&mut self) -> Vec<EditorAction> {
+        self.mode = VimMode::Insert;
+        vec![
+            EditorAction::StartEditGroup,
+            EditorAction::MoveCursor {
+                motion: Motion::LineStart,
+                count: 1,
+            },
+            EditorAction::ClearSearch,
+            EditorAction::SetMode("INSERT".to_string()),
+        ]
+    }
+
+    pub fn open_below(&mut self) -> Vec<EditorAction> {
+        self.mode = VimMode::Insert;
+        vec![
+            EditorAction::StartEditGroup,
+            EditorAction::MoveCursor {
+                motion: Motion::LineEnd,
+                count: 1,
+            },
+            EditorAction::InsertNewline,
+            EditorAction::ClearSearch,
+            EditorAction::SetMode("INSERT".to_string()),
+        ]
+    }
+
+    pub fn open_above(&mut self) -> Vec<EditorAction> {
+        self.mode = VimMode::Insert;
+        vec![
+            EditorAction::StartEditGroup,
+            EditorAction::MoveCursor {
+                motion: Motion::LineStart,
+                count: 1,
+            },
+            EditorAction::InsertNewline,
+            EditorAction::MoveCursor {
+                motion: Motion::Up,
+                count: 1,
+            },
+            EditorAction::ClearSearch,
+            EditorAction::SetMode("INSERT".to_string()),
+        ]
+    }
+
+    pub fn exit_insert(&mut self) -> Vec<EditorAction> {
+        info!("exiting insert mode");
+        self.mode = VimMode::Normal;
+        vec![
+            EditorAction::FinishEditGroup,
+            EditorAction::SetMode("NORMAL".to_string()),
+        ]
+    }
+
+    pub fn enter_command(&mut self) {
+        self.command_line.clear();
+        self.mode = VimMode::Command;
+    }
+
+    pub fn enter_search(&mut self) {
+        self.search_query.clear();
+        self.mode = VimMode::Search;
+    }
+
+    pub fn enter_visual(&mut self, buf: &dyn BufferQuery) {
+        info!("entering visual mode");
+        self.selection_anchor = Some(buf.cursor());
+        self.mode = VimMode::Visual;
+    }
+
+    pub fn enter_visual_line(&mut self, buf: &dyn BufferQuery) {
+        info!("entering visual line mode");
+        if self.mode == VimMode::Visual {
+            self.mode = VimMode::VisualLine;
+        } else if self.mode == VimMode::VisualLine {
+            self.selection_anchor = None;
+            self.mode = VimMode::Normal;
+        } else {
+            self.selection_anchor = Some(buf.cursor());
+            self.mode = VimMode::VisualLine;
+        }
+    }
+
+    pub fn exit_visual(&mut self) -> Vec<EditorAction> {
+        info!("exiting visual mode");
+        self.selection_anchor = None;
+        self.mode = VimMode::Normal;
+        vec![
+            EditorAction::SetSelection(None),
+            EditorAction::SetMode("NORMAL".to_string()),
+        ]
+    }
+
+    pub fn visual_delete(&mut self, buf: &dyn BufferQuery) -> Vec<EditorAction> {
+        let mut actions = Vec::new();
+        if let Some((start, end)) = self.compute_selection(buf) {
+            actions.push(EditorAction::DeleteRange(Range { start, end }));
+        }
+        self.selection_anchor = None;
+        self.mode = VimMode::Normal;
+        actions.push(EditorAction::SetSelection(None));
+        actions.push(EditorAction::SetMode("NORMAL".to_string()));
+        actions
+    }
+
+    pub fn visual_yank(&mut self, buf: &dyn BufferQuery) -> Vec<EditorAction> {
+        let mut actions = Vec::new();
+        if let Some((start, end)) = self.compute_selection(buf) {
+            actions.push(EditorAction::YankRange(Range { start, end }));
+        }
+        self.selection_anchor = None;
+        self.mode = VimMode::Normal;
+        actions.push(EditorAction::SetSelection(None));
+        actions.push(EditorAction::SetMode("NORMAL".to_string()));
+        actions
+    }
+
+    pub fn visual_change(&mut self, buf: &dyn BufferQuery) -> Vec<EditorAction> {
+        let mut actions = Vec::new();
+        if let Some((start, end)) = self.compute_selection(buf) {
+            actions.push(EditorAction::ChangeRange(Range { start, end }));
+        }
+        self.selection_anchor = None;
+        self.mode = VimMode::Insert;
+        actions.push(EditorAction::SetSelection(None));
+        actions.push(EditorAction::SetMode("INSERT".to_string()));
+        actions
+    }
+
+    pub fn compute_selection(
+        &self,
+        buf: &dyn BufferQuery,
+    ) -> Option<(usize, usize)> {
+        let anchor = self.selection_anchor?;
+        let cursor = buf.cursor();
+
+        if self.mode == VimMode::VisualLine {
+            let anchor_line = buf.char_to_line(anchor);
+            let cursor_line = buf.char_to_line(cursor);
+            let (start_line, end_line) = if anchor_line <= cursor_line {
+                (anchor_line, cursor_line)
+            } else {
+                (cursor_line, anchor_line)
+            };
+            let start = buf.line_to_char(start_line);
+            let end = if end_line + 1 < buf.total_lines() {
+                buf.line_to_char(end_line + 1)
+            } else {
+                buf.len_chars()
+            };
+            Some((start, end))
+        } else if anchor <= cursor {
+            Some((anchor, cursor + 1))
+        } else {
+            Some((cursor, anchor + 1))
+        }
+    }
+
+    pub fn mode_color(&self) -> (f32, f32, f32) {
+        match self.mode {
+            VimMode::Normal => (0.6, 0.8, 1.0),
+            VimMode::Insert => (0.6, 1.0, 0.6),
+            VimMode::Command | VimMode::Search => (1.0, 0.8, 0.5),
+            VimMode::Visual | VimMode::VisualLine => (0.9, 0.6, 1.0),
+        }
+    }
+
+    pub fn status_line_override(&self) -> Option<String> {
+        match self.mode {
+            VimMode::Command => Some(format!(":{}", self.command_line)),
+            VimMode::Search => Some(format!("/{}", self.search_query)),
+            _ => None,
+        }
+    }
+
+    pub fn handle_key(
+        &mut self,
+        key: &keyboard::Key,
+        modified_key: &keyboard::Key,
+        modifiers: &keyboard::Modifiers,
+        text: Option<&str>,
+        global_keymap: &Keymap,
+        mode_keymap: &Keymap,
+        buf: &dyn BufferQuery,
+    ) -> Vec<EditorAction> {
+        if (modifiers.control() || modifiers.command() || modifiers.alt())
+            && let Some(kp) = KeyPress::from_iced(modified_key, modifiers)
+            && let KeymapLookup::Match(cmd) = global_keymap.lookup(&[kp])
+        {
+            let count = self.count_accum.unwrap_or(1);
+            self.count_accum = None;
+            return commands::resolve(cmd, count, self, buf);
+        }
+
+        match self.mode {
+            VimMode::Normal => self.handle_normal(modified_key, mode_keymap, buf),
+            VimMode::Visual | VimMode::VisualLine => {
+                self.handle_visual(modified_key, mode_keymap, buf)
+            }
+            VimMode::Insert => self.handle_insert(key, modifiers, mode_keymap, buf, text),
+            VimMode::Command => self.handle_command(key, text),
+            VimMode::Search => self.handle_search(key, text),
+        }
+    }
+
+    fn handle_normal(
+        &mut self,
+        key: &keyboard::Key,
+        keymap: &Keymap,
+        buf: &dyn BufferQuery,
+    ) -> Vec<EditorAction> {
+        if is_bare_modifier(key) {
+            return vec![];
+        }
+
+        if self.pending_replace {
+            self.pending_replace = false;
+            if let keyboard::Key::Character(c) = key
+                && let Some(ch) = c.as_str().chars().next()
+            {
+                return vec![EditorAction::ReplaceChar(ch)];
+            }
+            return vec![];
+        }
+
+        if let Some((forward, stop_before)) = self.pending_find_char.take() {
+            if let keyboard::Key::Character(c) = key
+                && let Some(ch) = c.as_str().chars().next()
+            {
+                self.last_find_char = Some((ch, forward, stop_before));
+                return vec![EditorAction::MoveCursor {
+                    motion: Motion::FindChar {
+                        ch,
+                        forward,
+                        stop_before,
+                    },
+                    count: self.count_accum.unwrap_or(1),
+                }];
+            }
+            return vec![];
+        }
+
+        if self.pending_operator.is_some() {
+            return self.handle_operator_pending(key, keymap, buf);
+        }
+
+        if let keyboard::Key::Character(c) = key {
+            let s = c.as_str();
+            if s.len() == 1 {
+                let ch = s.chars().next().unwrap();
+                if ch.is_ascii_digit() && (ch != '0' || self.count_accum.is_some()) {
+                    let current = self.count_accum.unwrap_or(0);
+                    self.count_accum = Some(current * 10 + (ch as usize - '0' as usize));
+                    return vec![];
+                }
+            }
+        }
+
+        if let Some(kp) = KeyPress::from_iced(key, &keyboard::Modifiers::default()) {
+            self.pending_keys.push(kp);
+
+            match keymap.lookup(&self.pending_keys) {
+                KeymapLookup::Match(cmd) => {
+                    let count = self.count_accum.unwrap_or(1);
+                    self.pending_keys.clear();
+                    self.count_accum = None;
+
+                    if cmd == "op.delete" || cmd == "op.change" || cmd == "op.yank" {
+                        self.pending_operator = Some(match cmd {
+                            "op.delete" => Operator::Delete,
+                            "op.change" => Operator::Change,
+                            _ => Operator::Yank,
+                        });
+                        self.count_accum = Some(count);
+                        return vec![];
+                    }
+
+                    commands::resolve(cmd, count, self, buf)
+                }
+                KeymapLookup::Pending => vec![],
+                KeymapLookup::NoMatch => {
+                    debug!(keys = ?self.pending_keys, "unhandled normal mode key sequence");
+                    self.pending_keys.clear();
+                    self.count_accum = None;
+                    vec![]
+                }
+            }
+        } else {
+            self.pending_keys.clear();
+            self.count_accum = None;
+            vec![]
+        }
+    }
+
+    fn handle_operator_pending(
+        &mut self,
+        key: &keyboard::Key,
+        keymap: &Keymap,
+        buf: &dyn BufferQuery,
+    ) -> Vec<EditorAction> {
+        let operator = self.pending_operator.unwrap();
+
+        if let Some((forward, stop_before)) = self.pending_find_char.take() {
+            if let keyboard::Key::Character(c) = key
+                && let Some(ch) = c.as_str().chars().next()
+            {
+                self.last_find_char = Some((ch, forward, stop_before));
+                let count = self.count_accum.unwrap_or(1);
+                self.pending_operator = None;
+                self.pending_keys.clear();
+                self.count_accum = None;
+
+                return self.resolve_operator_with_find_char(
+                    operator, ch, forward, stop_before, count, buf,
+                );
+            }
+            self.pending_operator = None;
+            self.pending_keys.clear();
+            self.count_accum = None;
+            return vec![];
+        }
+
+        if let keyboard::Key::Character(c) = key {
+            let ch = c.as_str();
+            let is_doubled = match operator {
+                Operator::Delete => ch == "d",
+                Operator::Change => ch == "c",
+                Operator::Yank => ch == "y",
+            };
+            if is_doubled {
+                let count = self.count_accum.unwrap_or(1);
+                self.pending_operator = None;
+                self.pending_keys.clear();
+                self.count_accum = None;
+                return self.resolve_operator_whole_line(operator, count, buf);
+            }
+        }
+
+        if let Some(kp) = KeyPress::from_iced(key, &keyboard::Modifiers::default()) {
+            self.pending_keys.push(kp);
+
+            if self.pending_keys.len() == 1
+                && matches!(kp.key, KeyId::Char('i') | KeyId::Char('a'))
+            {
+                return vec![];
+            }
+
+            if self.pending_keys.len() == 2 {
+                let first = self.pending_keys[0];
+                let second = self.pending_keys[1];
+                if let (KeyId::Char(modifier), KeyId::Char(obj)) = (first.key, second.key) {
+                    let text_obj = parse_text_object(modifier, obj);
+                    if let Some(obj) = text_obj {
+                        let count = self.count_accum.unwrap_or(1);
+                        self.pending_operator = None;
+                        self.pending_keys.clear();
+                        self.count_accum = None;
+                        return self.resolve_operator_text_object(operator, obj, count, buf);
+                    }
+                    self.pending_keys.clear();
+                    self.pending_keys.push(second);
+                }
+            }
+
+            match keymap.lookup(&self.pending_keys) {
+                KeymapLookup::Match(cmd) => {
+                    let count = self.count_accum.unwrap_or(1);
+                    self.pending_keys.clear();
+                    self.count_accum = None;
+
+                    if cmd == "op.delete" || cmd == "op.change" || cmd == "op.yank" {
+                        self.pending_operator = None;
+                        return vec![];
+                    }
+
+                    match cmd {
+                        "motion.find_char_forward" => {
+                            self.pending_find_char = Some((true, false));
+                            return vec![];
+                        }
+                        "motion.find_char_backward" => {
+                            self.pending_find_char = Some((false, false));
+                            return vec![];
+                        }
+                        "motion.find_char_forward_before" => {
+                            self.pending_find_char = Some((true, true));
+                            return vec![];
+                        }
+                        "motion.find_char_backward_before" => {
+                            self.pending_find_char = Some((false, true));
+                            return vec![];
+                        }
+                        _ => {}
+                    }
+
+                    let op = self.pending_operator.take().unwrap();
+                    self.resolve_operator_motion(op, cmd, count, buf)
+                }
+                KeymapLookup::Pending => vec![],
+                KeymapLookup::NoMatch => {
+                    debug!(
+                        keys = ?self.pending_keys,
+                        "unhandled operator-pending key sequence"
+                    );
+                    self.pending_keys.clear();
+                    self.count_accum = None;
+                    self.pending_operator = None;
+                    vec![]
+                }
+            }
+        } else {
+            self.pending_keys.clear();
+            self.count_accum = None;
+            self.pending_operator = None;
+            vec![]
+        }
+    }
+
+    fn resolve_operator_motion(
+        &mut self,
+        operator: Operator,
+        motion_cmd: CommandId,
+        count: usize,
+        buf: &dyn BufferQuery,
+    ) -> Vec<EditorAction> {
+        // Vim motions are either inclusive (destination char is part of the
+        // operated range) or exclusive (destination char is not).
+        let (motion, inclusive) = match motion_cmd {
+            "cursor.move_left" => (Motion::Left, false),
+            "cursor.move_right" => (Motion::Right, false),
+            "cursor.move_up" => (Motion::Up, false),
+            "cursor.move_down" => (Motion::Down, false),
+            "cursor.move_word_forward" => (Motion::WordForward, false),
+            "cursor.move_word_backward" => (Motion::WordBackward, false),
+            "cursor.move_word_end" => (Motion::WordEnd, true),
+            "cursor.move_line_start" => (Motion::LineStart, false),
+            "cursor.move_line_end" => (Motion::LineEnd, true),
+            "cursor.move_first_non_whitespace" => (Motion::FirstNonWhitespace, false),
+            "cursor.move_to_start" => (Motion::FileStart, false),
+            "cursor.move_to_end" => (Motion::FileEnd, false),
+            "motion.repeat_find_char" => {
+                if let Some((ch, forward, stop_before)) = self.last_find_char {
+                    (Motion::FindChar {
+                        ch,
+                        forward,
+                        stop_before,
+                    }, true)
+                } else {
+                    return vec![];
+                }
+            }
+            "motion.repeat_find_char_reverse" => {
+                if let Some((ch, forward, stop_before)) = self.last_find_char {
+                    (Motion::FindChar {
+                        ch,
+                        forward: !forward,
+                        stop_before,
+                    }, true)
+                } else {
+                    return vec![];
+                }
+            }
+            _ => return vec![],
+        };
+
+        let before = buf.cursor();
+        let after = buf.cursor_after_motion(&motion, count);
+        let (start, end) = if before <= after {
+            (before, if inclusive { after + 1 } else { after })
+        } else {
+            (if inclusive { after } else { after }, before + 1)
+        };
+
+        if start >= end {
+            return vec![];
+        }
+
+        self.emit_operator(operator, start, end)
+    }
+
+    fn resolve_operator_whole_line(
+        &mut self,
+        operator: Operator,
+        count: usize,
+        buf: &dyn BufferQuery,
+    ) -> Vec<EditorAction> {
+        let (line, _) = buf.cursor_position();
+        let line_start = buf.line_to_char(line);
+        let target_line = (line + count).min(buf.total_lines());
+        let line_end = if target_line < buf.total_lines() {
+            buf.line_to_char(target_line)
+        } else {
+            buf.len_chars()
+        };
+
+        if line_start == line_end {
+            return vec![];
+        }
+
+        self.emit_operator(operator, line_start, line_end)
+    }
+
+    fn resolve_operator_text_object(
+        &mut self,
+        operator: Operator,
+        obj: TextObject,
+        _count: usize,
+        buf: &dyn BufferQuery,
+    ) -> Vec<EditorAction> {
+        let (start, end) = resolve_text_object(buf, obj);
+        if start == end {
+            return vec![];
+        }
+        self.emit_operator(operator, start, end)
+    }
+
+    fn resolve_operator_with_find_char(
+        &mut self,
+        operator: Operator,
+        ch: char,
+        forward: bool,
+        stop_before: bool,
+        count: usize,
+        buf: &dyn BufferQuery,
+    ) -> Vec<EditorAction> {
+        let motion = Motion::FindChar {
+            ch,
+            forward,
+            stop_before,
+        };
+        let before = buf.cursor();
+        let after = buf.cursor_after_motion(&motion, count);
+        let (start, end) = if before <= after {
+            (before, after + 1)
+        } else {
+            (after, before)
+        };
+
+        if start == end {
+            return vec![];
+        }
+
+        self.emit_operator(operator, start, end)
+    }
+
+    fn emit_operator(
+        &mut self,
+        operator: Operator,
+        start: usize,
+        end: usize,
+    ) -> Vec<EditorAction> {
+        let range = Range { start, end };
+        match operator {
+            Operator::Delete => vec![EditorAction::DeleteRange(range)],
+            Operator::Change => {
+                self.mode = VimMode::Insert;
+                vec![
+                    EditorAction::ChangeRange(range),
+                    EditorAction::SetMode("INSERT".to_string()),
+                ]
+            }
+            Operator::Yank => vec![EditorAction::YankRange(range)],
+        }
+    }
+
+    fn handle_insert(
+        &mut self,
+        key: &keyboard::Key,
+        modifiers: &keyboard::Modifiers,
+        keymap: &Keymap,
+        buf: &dyn BufferQuery,
+        text: Option<&str>,
+    ) -> Vec<EditorAction> {
+        if let Some(kp) = KeyPress::from_iced(key, modifiers)
+            && matches!(kp.key, KeyId::Named(_))
+        {
+            match keymap.lookup(&[kp]) {
+                KeymapLookup::Match(cmd) => {
+                    return commands::resolve(cmd, 1, self, buf);
+                }
+                _ => {
+                    if !matches!(key, keyboard::Key::Named(keyboard::key::Named::Space)) {
+                        return vec![];
+                    }
+                }
+            }
+        }
+
+        if let Some(t) = text {
+            let mut actions = Vec::new();
+            for ch in t.chars() {
+                if !ch.is_control() {
+                    actions.push(EditorAction::InsertChar(ch));
+                }
+            }
+            if !actions.is_empty() {
+                return actions;
+            }
+        }
+
+        vec![]
+    }
+
+    fn handle_visual(
+        &mut self,
+        key: &keyboard::Key,
+        keymap: &Keymap,
+        buf: &dyn BufferQuery,
+    ) -> Vec<EditorAction> {
+        if is_bare_modifier(key) {
+            return vec![];
+        }
+
+        if let Some(kp) = KeyPress::from_iced(key, &keyboard::Modifiers::default()) {
+            if self.pending_keys.len() == 1 {
+                let first = self.pending_keys[0];
+                if let (KeyId::Char(modifier), KeyId::Char(obj)) = (first.key, kp.key) {
+                    if let Some(text_obj) = parse_text_object(modifier, obj) {
+                        self.pending_keys.clear();
+                        self.count_accum = None;
+                        let (start, end) = resolve_text_object(buf, text_obj);
+                        if start != end {
+                            self.selection_anchor = Some(start);
+                            return vec![
+                                EditorAction::SetCursor(end.saturating_sub(1)),
+                                EditorAction::SetSelection(Some((start, end))),
+                            ];
+                        }
+                        return vec![];
+                    }
+                    self.pending_keys.clear();
+                    self.pending_keys.push(kp);
+                } else {
+                    self.pending_keys.clear();
+                    self.pending_keys.push(kp);
+                }
+            } else {
+                if matches!(kp.key, KeyId::Char('i') | KeyId::Char('a')) {
+                    self.pending_keys.push(kp);
+                    return vec![];
+                }
+                if let KeyId::Char(ch) = kp.key
+                    && ch.is_ascii_digit()
+                    && (ch != '0' || self.count_accum.is_some())
+                {
+                    let current = self.count_accum.unwrap_or(0);
+                    self.count_accum = Some(current * 10 + (ch as usize - '0' as usize));
+                    return vec![];
+                }
+                self.pending_keys.push(kp);
+            }
+
+            match keymap.lookup(&self.pending_keys) {
+                KeymapLookup::Match(cmd) => {
+                    let count = self.count_accum.unwrap_or(1);
+                    self.pending_keys.clear();
+                    self.count_accum = None;
+                    commands::resolve(cmd, count, self, buf)
+                }
+                KeymapLookup::Pending => vec![],
+                KeymapLookup::NoMatch => {
+                    debug!(
+                        keys = ?self.pending_keys,
+                        "unhandled visual mode key sequence"
+                    );
+                    self.pending_keys.clear();
+                    self.count_accum = None;
+                    vec![]
+                }
+            }
+        } else {
+            self.pending_keys.clear();
+            self.count_accum = None;
+            vec![]
+        }
+    }
+
+    fn handle_search(
+        &mut self,
+        key: &keyboard::Key,
+        text: Option<&str>,
+    ) -> Vec<EditorAction> {
+        if let keyboard::Key::Named(named) = key {
+            match named {
+                keyboard::key::Named::Escape => {
+                    self.search_query.clear();
+                    self.mode = VimMode::Normal;
+                    return vec![EditorAction::SetMode("NORMAL".to_string())];
+                }
+                keyboard::key::Named::Enter => {
+                    let query = self.search_query.clone();
+                    self.search_query.clear();
+                    self.mode = VimMode::Normal;
+                    if query.is_empty() {
+                        return vec![EditorAction::SetMode("NORMAL".to_string())];
+                    }
+                    return vec![
+                        EditorAction::SetSearchPattern(query),
+                        EditorAction::SearchNext { count: 1 },
+                        EditorAction::SetMode("NORMAL".to_string()),
+                    ];
+                }
+                keyboard::key::Named::Backspace => {
+                    if self.search_query.is_empty() {
+                        self.mode = VimMode::Normal;
+                        return vec![EditorAction::SetMode("NORMAL".to_string())];
+                    } else {
+                        self.search_query.pop();
+                    }
+                    return vec![];
+                }
+                keyboard::key::Named::Space => {}
+                _ => return vec![],
+            }
+        }
+
+        if let Some(t) = text {
+            for ch in t.chars() {
+                if !ch.is_control() {
+                    self.search_query.push(ch);
+                }
+            }
+        }
+        vec![]
+    }
+
+    fn handle_command(
+        &mut self,
+        key: &keyboard::Key,
+        text: Option<&str>,
+    ) -> Vec<EditorAction> {
+        if let keyboard::Key::Named(named) = key {
+            match named {
+                keyboard::key::Named::Escape => {
+                    self.command_line.clear();
+                    self.mode = VimMode::Normal;
+                    return vec![EditorAction::SetMode("NORMAL".to_string())];
+                }
+                keyboard::key::Named::Enter => {
+                    let cmd = self.command_line.clone();
+                    self.command_line.clear();
+                    self.mode = VimMode::Normal;
+                    let mut actions = vec![EditorAction::SetMode("NORMAL".to_string())];
+                    actions.extend(Self::resolve_ex_command(&cmd));
+                    return actions;
+                }
+                keyboard::key::Named::Backspace => {
+                    if self.command_line.is_empty() {
+                        self.mode = VimMode::Normal;
+                        return vec![EditorAction::SetMode("NORMAL".to_string())];
+                    } else {
+                        self.command_line.pop();
+                    }
+                    return vec![];
+                }
+                keyboard::key::Named::Space => {}
+                _ => return vec![],
+            }
+        }
+
+        if let Some(t) = text {
+            for ch in t.chars() {
+                if !ch.is_control() {
+                    self.command_line.push(ch);
+                }
+            }
+        }
+        vec![]
+    }
+
+    fn resolve_ex_command(cmd: &str) -> Vec<EditorAction> {
+        match cmd.trim() {
+            "w" => vec![EditorAction::Save],
+            "q" => vec![EditorAction::Quit { force: false }],
+            "q!" => vec![EditorAction::Quit { force: true }],
+            "wq" => vec![EditorAction::WriteQuit],
+            other => vec![EditorAction::SetStatusMessage(format!(
+                "Unknown command: {}",
+                other
+            ))],
+        }
+    }
+}

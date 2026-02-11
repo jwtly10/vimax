@@ -23,7 +23,6 @@ impl UndoStack {
         }
     }
 
-    /// Start collecting edits for an insert mode session.
     pub fn start_group(&mut self, cursor_before: usize) {
         self.pending = Some(EditGroup {
             edits: Vec::new(),
@@ -31,7 +30,6 @@ impl UndoStack {
         });
     }
 
-    /// Finish the current group and push it onto the undo stack.
     pub fn finish_group(&mut self) {
         if let Some(group) = self.pending.take()
             && !group.edits.is_empty()
@@ -41,7 +39,6 @@ impl UndoStack {
         }
     }
 
-    /// Push a single-edit group immediately (for normal mode commands like dd, x).
     pub fn push_edit(&mut self, edit: EditKind, cursor_before: usize) {
         self.undo.push(EditGroup {
             edits: vec![edit],
@@ -50,7 +47,15 @@ impl UndoStack {
         self.redo.clear();
     }
 
-    /// Record an insert into the pending group, coalescing consecutive chars.
+    pub fn push_edits(&mut self, edits: Vec<EditKind>, cursor_before: usize) {
+        self.undo.push(EditGroup {
+            edits,
+            cursor_before,
+        });
+        self.redo.clear();
+    }
+
+    /// Coalesces consecutive char inserts at adjacent positions into one edit.
     pub fn record_insert(&mut self, pos: usize, ch: char) {
         if let Some(group) = &mut self.pending {
             if let Some(EditKind::Insert { pos: last_pos, text }) = group.edits.last_mut()
@@ -66,7 +71,6 @@ impl UndoStack {
         }
     }
 
-    /// Record an insert of a string into the pending group.
     pub fn record_insert_str(&mut self, pos: usize, s: &str) {
         if let Some(group) = &mut self.pending {
             group.edits.push(EditKind::Insert {
@@ -76,7 +80,6 @@ impl UndoStack {
         }
     }
 
-    /// Record a delete into the pending group (for backspace/delete in insert mode).
     pub fn record_delete(&mut self, pos: usize, text: &str) {
         if let Some(group) = &mut self.pending {
             group.edits.push(EditKind::Delete {

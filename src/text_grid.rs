@@ -19,18 +19,18 @@ pub struct TextGrid<'a> {
     scroll_y: usize,
     scroll_x: usize,
     selection: Option<(usize, usize)>,
-    search_matches: Vec<usize>,
+    search_matches: &'a [usize],
     search_len: usize,
 }
 
-pub fn text_grid(
-    buffer: &Buffer,
+pub fn text_grid<'a>(
+    buffer: &'a Buffer,
     scroll_y: usize,
     scroll_x: usize,
     selection: Option<(usize, usize)>,
-    search_matches: Vec<usize>,
+    search_matches: &'a [usize],
     search_len: usize,
-) -> Element<'_, crate::app::Message> {
+) -> Element<'a, crate::app::Message> {
     Element::new(TextGrid {
         buffer,
         scroll_y,
@@ -94,7 +94,6 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                     shell.publish(crate::app::Message::MouseClick { x: pos.x, y: pos.y });
                 }
             }
-            // Report viewport size on window resize events
             Event::Window(iced::window::Event::Resized { .. }) => {
                 let visible_lines = (bounds.height / LINE_HEIGHT) as usize;
                 let text_area_width = bounds.width - GUTTER_WIDTH - 8.0;
@@ -137,7 +136,6 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                 break;
             }
 
-            // Highlight current line background
             if line_idx == cursor_line {
                 renderer.fill_quad(
                     renderer::Quad {
@@ -153,7 +151,6 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                 );
             }
 
-            // Line number
             let line_num = format!("{:>width$}", line_idx + 1, width = GUTTER_CHARS);
             let line_num_color = if line_idx == cursor_line {
                 Color::from_rgb(0.9, 0.9, 0.5)
@@ -178,7 +175,6 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                 *viewport,
             );
 
-            // Selection highlight
             if let Some((sel_start, sel_end)) = self.selection {
                 let line_start_char = rope.line_to_char(line_idx);
                 let line_end_char = if line_idx + 1 < total_lines {
@@ -187,7 +183,6 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                     rope.len_chars()
                 };
 
-                // Check if this line overlaps with the selection
                 if sel_start < line_end_char && sel_end > line_start_char {
                     let sel_col_start = sel_start.saturating_sub(line_start_char);
                     let sel_col_end = if sel_end < line_end_char {
@@ -219,7 +214,6 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                 }
             }
 
-            // Search match highlights
             if self.search_len > 0 {
                 let line_start_char = rope.line_to_char(line_idx);
                 let line_end_char = if line_idx + 1 < total_lines {
@@ -228,9 +222,8 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                     rope.len_chars()
                 };
 
-                for &match_pos in &self.search_matches {
+                for &match_pos in self.search_matches {
                     let match_end = match_pos + self.search_len;
-                    // Check if this match overlaps with the current line
                     if match_pos < line_end_char && match_end > line_start_char {
                         let col_start = match_pos.saturating_sub(line_start_char);
                         let col_end = if match_end < line_end_char {
@@ -263,14 +256,12 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                 }
             }
 
-            // Line content (with horizontal scroll)
             let line = rope.line(line_idx);
             let line_str: String = line.chars().collect();
             let display_str = line_str.trim_end_matches('\n').trim_end_matches('\r');
 
             let text_x = bounds.x + GUTTER_WIDTH + 8.0;
 
-            // Apply horizontal scroll: skip first scroll_x chars
             let scrolled_str: String = display_str.chars().skip(scroll_x).collect();
 
             let text_area_width = bounds.width - GUTTER_WIDTH - 8.0;
@@ -292,11 +283,9 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                 *viewport,
             );
 
-            // Cursor block
             if line_idx == cursor_line && cursor_col >= scroll_x {
                 let cursor_x = text_x + ((cursor_col - scroll_x) as f32 * CHAR_WIDTH);
 
-                // Only draw cursor if it's within the visible text area
                 if cursor_x < bounds.x + bounds.width {
                     renderer.fill_quad(
                         renderer::Quad {
@@ -312,7 +301,6 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                         Color::from_rgba(0.8, 0.8, 0.3, 0.7),
                     );
 
-                    // Character under cursor
                     let char_count = display_str.chars().count();
                     let cursor_char: String = if cursor_col < char_count {
                         display_str.chars().nth(cursor_col).unwrap().to_string()

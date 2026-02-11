@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use iced::keyboard;
 use tracing::debug;
 
-use crate::command::CommandId;
+use super::mode::VimMode;
+
+pub type CommandId = &'static str;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyId {
@@ -38,7 +40,6 @@ impl KeyPress {
         }
     }
 
-    // TODO: not sure yet how these play nice with linux
     pub fn ctrl(mut self) -> Self {
         self.ctrl = true;
         self
@@ -54,9 +55,6 @@ impl KeyPress {
         self
     }
 
-    /// Convert an iced key event into a KeyPress for keymap lookup.
-    /// `use_modified` controls whether we use modified_key (normal mode)
-    /// or key (insert mode for named keys).
     pub fn from_iced(key: &keyboard::Key, modifiers: &keyboard::Modifiers) -> Option<Self> {
         let key_id = match key {
             keyboard::Key::Character(c) => {
@@ -64,7 +62,7 @@ impl KeyPress {
                 let mut chars = s.chars();
                 let ch = chars.next()?;
                 if chars.next().is_some() {
-                    return None; // multi-char sequences not supported as single key
+                    return None;
                 }
                 KeyId::Char(ch)
             }
@@ -102,7 +100,6 @@ impl Keymap {
     }
 
     pub fn bind(&mut self, keys: Vec<KeyPress>, command: CommandId) {
-        // Register all proper prefixes
         for len in 1..keys.len() {
             self.prefixes.insert(keys[..len].to_vec(), ());
         }
@@ -123,19 +120,14 @@ impl Keymap {
         }
     }
 
-    /// Copy all bindings from another keymap into this one.
     pub fn extend_from(&mut self, other: &Keymap) {
         for (keys, &cmd) in &other.bindings {
             self.bind(keys.clone(), cmd);
         }
     }
 
-    /// Remove a binding by its key sequence.
     pub fn remove(&mut self, keys: &[KeyPress]) {
         self.bindings.remove(keys);
-        // Note: we don't clean up prefixes since they might be shared
-        // with other bindings. Stale prefixes just cause a Pending that
-        // resolves to NoMatch on the next key, which is harmless.
     }
 }
 
@@ -162,18 +154,15 @@ impl Keymaps {
         &self.global
     }
 
-    pub fn for_mode(&self, mode: crate::input::VimMode) -> &Keymap {
-        use crate::input::VimMode;
+    pub fn for_mode(&self, mode: VimMode) -> &Keymap {
         match mode {
             VimMode::Normal => &self.normal,
             VimMode::Insert => &self.insert,
             VimMode::Visual | VimMode::VisualLine => &self.visual,
-            VimMode::Command | VimMode::Search => &self.insert, // command/search mode doesn't use keymap
+            VimMode::Command | VimMode::Search => &self.insert,
         }
     }
 }
-
-// -- Keymap builders --
 
 pub fn build_global_keymap() -> Keymap {
     let mut km = Keymap::new();
@@ -187,7 +176,6 @@ pub fn build_global_keymap() -> Keymap {
 pub fn build_normal_keymap() -> Keymap {
     let mut km = Keymap::new();
 
-    // Cursor movement
     km.bind(vec![KeyPress::char('h')], "cursor.move_left");
     km.bind(vec![KeyPress::char('j')], "cursor.move_down");
     km.bind(vec![KeyPress::char('k')], "cursor.move_up");
@@ -196,14 +184,13 @@ pub fn build_normal_keymap() -> Keymap {
     km.bind(vec![KeyPress::char('b')], "cursor.move_word_backward");
     km.bind(vec![KeyPress::char('0')], "cursor.move_line_start");
     km.bind(vec![KeyPress::char('$')], "cursor.move_line_end");
-    km.bind(vec![KeyPress::char('e')], "cursor.move_line_end");
+    km.bind(vec![KeyPress::char('e')], "cursor.move_word_end");
     km.bind(
         vec![KeyPress::char('^')],
         "cursor.move_first_non_whitespace",
     );
     km.bind(vec![KeyPress::char('G')], "cursor.move_to_end");
 
-    // Arrow keys
     km.bind(
         vec![KeyPress::named(keyboard::key::Named::ArrowLeft)],
         "cursor.move_left",
@@ -221,26 +208,21 @@ pub fn build_normal_keymap() -> Keymap {
         "cursor.move_down",
     );
 
-    // Editing
     km.bind(vec![KeyPress::char('x')], "edit.delete_char_forward");
     km.bind(vec![KeyPress::char('u')], "edit.undo");
 
-    // Operators
     km.bind(vec![KeyPress::char('d')], "op.delete");
     km.bind(vec![KeyPress::char('c')], "op.change");
     km.bind(vec![KeyPress::char('y')], "op.yank");
 
-    // Chords
     km.bind(
         vec![KeyPress::char('g'), KeyPress::char('g')],
         "cursor.move_to_start",
     );
 
-    // Paste
     km.bind(vec![KeyPress::char('p')], "edit.paste_after");
     km.bind(vec![KeyPress::char('P')], "edit.paste_before");
 
-    // Vim mode transitions
     km.bind(vec![KeyPress::char('i')], "vim.enter_insert");
     km.bind(vec![KeyPress::char('a')], "vim.enter_insert_after");
     km.bind(vec![KeyPress::char('A')], "vim.enter_insert_line_end");
@@ -261,10 +243,19 @@ pub fn build_normal_keymap() -> Keymap {
     km.bind(vec![KeyPress::char('r')], "edit.replace_char");
     km.bind(vec![KeyPress::char('f')], "motion.find_char_forward");
     km.bind(vec![KeyPress::char('F')], "motion.find_char_backward");
-    km.bind(vec![KeyPress::char('t')], "motion.find_char_forward_before");
-    km.bind(vec![KeyPress::char('T')], "motion.find_char_backward_before");
+    km.bind(
+        vec![KeyPress::char('t')],
+        "motion.find_char_forward_before",
+    );
+    km.bind(
+        vec![KeyPress::char('T')],
+        "motion.find_char_backward_before",
+    );
     km.bind(vec![KeyPress::char(';')], "motion.repeat_find_char");
-    km.bind(vec![KeyPress::char(',')], "motion.repeat_find_char_reverse");
+    km.bind(
+        vec![KeyPress::char(',')],
+        "motion.repeat_find_char_reverse",
+    );
 
     km
 }
@@ -274,7 +265,6 @@ fn build_visual_keymap(normal: &Keymap) -> Keymap {
 
     km.extend_from(normal);
 
-    // Remove non supported keys
     km.remove(&[KeyPress::char('i')]);
     km.remove(&[KeyPress::char('a')]);
     km.remove(&[KeyPress::char('o')]);
@@ -299,7 +289,6 @@ fn build_visual_keymap(normal: &Keymap) -> Keymap {
     );
     km.bind(vec![KeyPress::char('v')], "vim.exit_visual");
 
-    // V toggles to linewise visual
     km.bind(vec![KeyPress::char('V')], "vim.enter_visual_line");
 
     km
@@ -329,7 +318,6 @@ pub fn build_insert_keymap() -> Keymap {
         "insert.tab",
     );
 
-    // Arrow keys in insert mode
     km.bind(
         vec![KeyPress::named(keyboard::key::Named::ArrowLeft)],
         "cursor.move_left",
@@ -347,7 +335,6 @@ pub fn build_insert_keymap() -> Keymap {
         "cursor.move_down",
     );
 
-    // Option arrow keys with modifiers for word/line movement in insert mode
     km.bind(
         vec![KeyPress::named(keyboard::key::Named::ArrowLeft).alt()],
         "cursor.move_word_backward",

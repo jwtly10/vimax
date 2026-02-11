@@ -1,0 +1,186 @@
+use crate::action::{BufferQuery, EditorAction, Motion};
+
+use super::input::InputState;
+
+pub fn resolve(
+    id: &str,
+    count: usize,
+    input: &mut InputState,
+    buf: &dyn BufferQuery,
+) -> Vec<EditorAction> {
+    match id {
+        // Cursor motions
+        "cursor.move_left" => vec![EditorAction::MoveCursor {
+            motion: Motion::Left,
+            count,
+        }],
+        "cursor.move_right" => vec![EditorAction::MoveCursor {
+            motion: Motion::Right,
+            count,
+        }],
+        "cursor.move_up" => vec![EditorAction::MoveCursor {
+            motion: Motion::Up,
+            count,
+        }],
+        "cursor.move_down" => vec![EditorAction::MoveCursor {
+            motion: Motion::Down,
+            count,
+        }],
+        "cursor.move_word_forward" => vec![EditorAction::MoveCursor {
+            motion: Motion::WordForward,
+            count,
+        }],
+        "cursor.move_word_backward" => vec![EditorAction::MoveCursor {
+            motion: Motion::WordBackward,
+            count,
+        }],
+        "cursor.move_word_end" => vec![EditorAction::MoveCursor {
+            motion: Motion::WordEnd,
+            count,
+        }],
+        "cursor.move_line_start" => vec![EditorAction::MoveCursor {
+            motion: Motion::LineStart,
+            count: 1,
+        }],
+        "cursor.move_line_end" => vec![EditorAction::MoveCursor {
+            motion: Motion::LineEnd,
+            count: 1,
+        }],
+        "cursor.move_first_non_whitespace" => vec![EditorAction::MoveCursor {
+            motion: Motion::FirstNonWhitespace,
+            count: 1,
+        }],
+        "cursor.move_to_start" => vec![EditorAction::MoveCursor {
+            motion: Motion::FileStart,
+            count: 1,
+        }],
+        "cursor.move_to_end" => vec![EditorAction::MoveCursor {
+            motion: Motion::FileEnd,
+            count: 1,
+        }],
+
+        // Scroll
+        "scroll.half_down" => vec![EditorAction::MoveCursor {
+            motion: Motion::HalfPageDown,
+            count,
+        }],
+        "scroll.half_up" => vec![EditorAction::MoveCursor {
+            motion: Motion::HalfPageUp,
+            count,
+        }],
+
+        // Editing
+        "edit.delete_char_forward" => vec![EditorAction::DeleteCharForward { count }],
+        "edit.delete_line" => vec![EditorAction::DeleteLine { count }],
+        "edit.undo" => vec![EditorAction::Undo],
+        "edit.redo" => vec![EditorAction::Redo],
+        "edit.paste_after" => vec![EditorAction::Paste { before: false }],
+        "edit.paste_before" => vec![EditorAction::Paste { before: true }],
+        "edit.replace_char" => {
+            input.pending_replace = true;
+            vec![]
+        }
+
+        // Insert mode transitions
+        "insert.backspace" => vec![EditorAction::DeleteCharBackward],
+        "insert.delete" => vec![EditorAction::DeleteCharForward { count: 1 }],
+        "insert.newline" => vec![EditorAction::InsertNewline],
+        "insert.tab" => vec![EditorAction::InsertTab],
+
+        // Vim mode transitions
+        "vim.enter_insert" => input.enter_insert(),
+        "vim.enter_insert_after" => input.enter_insert_after(),
+        "vim.enter_insert_line_end" => input.enter_insert_line_end(),
+        "vim.enter_insert_line_start" => input.enter_insert_line_start(),
+        "vim.open_below" => input.open_below(),
+        "vim.open_above" => input.open_above(),
+        "vim.exit_insert" => input.exit_insert(),
+        "vim.enter_command" => {
+            input.enter_command();
+            vec![]
+        }
+        "vim.enter_visual" => {
+            input.enter_visual(buf);
+            vec![]
+        }
+        "vim.enter_visual_line" => {
+            input.enter_visual_line(buf);
+            vec![]
+        }
+        "vim.exit_visual" => input.exit_visual(),
+        "vim.clear_search" => vec![EditorAction::ClearSearch],
+        "vim.enter_search" => {
+            input.enter_search();
+            vec![]
+        }
+
+        // Search
+        "search.next" => vec![EditorAction::SearchNext { count }],
+        "search.prev" => vec![EditorAction::SearchPrev { count }],
+
+        // Operators (set pending, no actions yet)
+        "op.delete" | "op.change" | "op.yank" => {
+            // Handled in input.rs handle_normal — shouldn't reach here
+            vec![]
+        }
+
+        // Visual operations
+        "visual.delete" => input.visual_delete(buf),
+        "visual.yank" => input.visual_yank(buf),
+        "visual.change" => input.visual_change(buf),
+
+        // Find char motions
+        "motion.find_char_forward" => {
+            input.pending_find_char = Some((true, false));
+            vec![]
+        }
+        "motion.find_char_backward" => {
+            input.pending_find_char = Some((false, false));
+            vec![]
+        }
+        "motion.find_char_forward_before" => {
+            input.pending_find_char = Some((true, true));
+            vec![]
+        }
+        "motion.find_char_backward_before" => {
+            input.pending_find_char = Some((false, true));
+            vec![]
+        }
+        "motion.repeat_find_char" => {
+            if let Some((ch, forward, stop_before)) = input.last_find_char {
+                vec![EditorAction::MoveCursor {
+                    motion: Motion::FindChar {
+                        ch,
+                        forward,
+                        stop_before,
+                    },
+                    count,
+                }]
+            } else {
+                vec![]
+            }
+        }
+        "motion.repeat_find_char_reverse" => {
+            if let Some((ch, forward, stop_before)) = input.last_find_char {
+                vec![EditorAction::MoveCursor {
+                    motion: Motion::FindChar {
+                        ch,
+                        forward: !forward,
+                        stop_before,
+                    },
+                    count,
+                }]
+            } else {
+                vec![]
+            }
+        }
+
+        // Buffer operations
+        "buffer.save" => vec![EditorAction::Save],
+        "buffer.quit" => vec![EditorAction::Quit { force: false }],
+        "buffer.force_quit" => vec![EditorAction::Quit { force: true }],
+        "buffer.write_quit" => vec![EditorAction::WriteQuit],
+
+        _ => vec![],
+    }
+}

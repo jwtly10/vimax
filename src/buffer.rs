@@ -1,3 +1,4 @@
+use crate::action::{BufferQuery, Motion};
 use crate::undo::{EditKind, UndoStack};
 
 use std::path::Path;
@@ -13,7 +14,7 @@ pub struct Buffer {
     file_path: Option<String>,
     modified: bool,
     undo_stack: UndoStack,
-    pub yank_register: String,
+    version: u64,
 }
 
 impl Buffer {
@@ -26,7 +27,7 @@ impl Buffer {
             file_path: None,
             modified: false,
             undo_stack: UndoStack::new(),
-            yank_register: String::new(),
+            version: 0,
         }
     }
 
@@ -39,7 +40,7 @@ impl Buffer {
             file_path: Some(file_path.to_string_lossy().to_string()),
             modified: false,
             undo_stack: UndoStack::new(),
-            yank_register: String::new(),
+            version: 0,
         }
     }
 
@@ -63,7 +64,6 @@ impl Buffer {
         self.cursor
     }
 
-    /// Returns 0-indexed (line, col)
     pub fn cursor_position(&self) -> (usize, usize) {
         let line = self.rope.char_to_line(self.cursor);
         let line_start = self.rope.line_to_char(line);
@@ -79,7 +79,6 @@ impl Buffer {
         self.undo_stack.finish_group();
     }
 
-    /// Undo the last edit group.
     pub fn undo(&mut self) {
         if let Some(group) = self.undo_stack.undo.pop() {
             for edit in group.edits.iter().rev() {
@@ -94,11 +93,11 @@ impl Buffer {
             }
             self.cursor = group.cursor_before;
             self.modified = true;
+            self.version += 1;
             self.undo_stack.redo.push(group);
         }
     }
 
-    /// Redo the last undone edit group.
     pub fn redo(&mut self) {
         if let Some(group) = self.undo_stack.redo.pop() {
             for edit in group.edits.iter() {
@@ -111,7 +110,6 @@ impl Buffer {
                     }
                 }
             }
-            // Place cursor at the end of the last edit
             if let Some(last) = group.edits.last() {
                 match last {
                     EditKind::Insert { pos, text } => self.cursor = *pos + text.len(),
@@ -119,14 +117,18 @@ impl Buffer {
                 }
             }
             self.modified = true;
+            self.version += 1;
             self.undo_stack.undo.push(group);
         }
     }
 
-    //  Mutations that record to undo stack
+    pub fn version(&self) -> u64 {
+        self.version
+    }
 
     pub fn insert_char(&mut self, ch: char) {
         self.modified = true;
+        self.version += 1;
         let pos = self.cursor;
         self.rope.insert_char(pos, ch);
         self.cursor += 1;
@@ -135,6 +137,7 @@ impl Buffer {
 
     pub fn insert_str(&mut self, s: &str) {
         self.modified = true;
+        self.version += 1;
         let pos = self.cursor;
         self.rope.insert(pos, s);
         self.cursor += s.chars().count();
@@ -156,6 +159,7 @@ impl Buffer {
         let deleted: String = self.rope.slice(line_start..line_end).into();
         self.rope.remove(line_start..line_end);
         self.modified = true;
+        self.version += 1;
         self.cursor = line_start.min(self.rope.len_chars());
         self.undo_stack.push_edit(
             EditKind::Delete {
@@ -169,6 +173,7 @@ impl Buffer {
     pub fn delete_char_backward(&mut self) {
         if self.cursor > 0 {
             self.modified = true;
+            self.version += 1;
             self.cursor -= 1;
             let ch: String = self.rope.slice(self.cursor..self.cursor + 1).into();
             self.rope.remove(self.cursor..self.cursor + 1);
@@ -179,9 +184,9 @@ impl Buffer {
     pub fn delete_char_forward(&mut self) {
         if self.cursor < self.rope.len_chars() {
             self.modified = true;
+            self.version += 1;
             let ch: String = self.rope.slice(self.cursor..self.cursor + 1).into();
             self.rope.remove(self.cursor..self.cursor + 1);
-            // Normal mode `x` — push as immediate edit group
             if self.undo_stack.pending.is_none() {
                 self.undo_stack.push_edit(
                     EditKind::Delete {
@@ -256,7 +261,6 @@ impl Buffer {
         self.cursor = self.rope.len_chars();
     }
 
-    /// Vim `^` — move to first non-whitespace character on the line.
     pub fn move_to_first_non_whitespace(&mut self) {
         let line = self.rope.char_to_line(self.cursor);
         let line_start = self.rope.line_to_char(line);
@@ -272,34 +276,45 @@ impl Buffer {
         self.cursor = line_start + offset;
     }
 
-    /// Vim `w` — move to start of next word.
     pub fn move_word_forward(&mut self) {
         let len = self.rope.len_chars();
         if self.cursor >= len {
             return;
         }
-        // Skip current word (non-whitespace)
         while self.cursor < len && !self.char_at(self.cursor).is_whitespace() {
             self.cursor += 1;
         }
-        // Skip whitespace
         while self.cursor < len && self.char_at(self.cursor).is_whitespace() {
             self.cursor += 1;
         }
     }
 
-    /// Vim `b` — move to start of previous word.
     pub fn move_word_backward(&mut self) {
         if self.cursor == 0 {
             return;
         }
-        // Skip whitespace before cursor
         while self.cursor > 0 && self.char_at(self.cursor - 1).is_whitespace() {
             self.cursor -= 1;
         }
-        // Skip word (non-whitespace)
         while self.cursor > 0 && !self.char_at(self.cursor - 1).is_whitespace() {
             self.cursor -= 1;
+        }
+    }
+
+    pub fn move_word_end(&mut self) {
+        let len = self.rope.len_chars();
+        if self.cursor + 1 >= len {
+            return;
+        }
+        // Move past current position
+        self.cursor += 1;
+        // Skip whitespace
+        while self.cursor < len && self.char_at(self.cursor).is_whitespace() {
+            self.cursor += 1;
+        }
+        // Move to end of word
+        while self.cursor + 1 < len && !self.char_at(self.cursor + 1).is_whitespace() {
+            self.cursor += 1;
         }
     }
 
@@ -323,12 +338,11 @@ impl Buffer {
         self.cursor = self.rope.line_to_char(line) + col;
     }
 
-    fn char_at(&self, idx: usize) -> char {
+    pub fn char_at(&self, idx: usize) -> char {
         self.rope.char(idx)
     }
 
-    /// Returns the length of the line without counting a trailing newline character, if present.
-    fn line_len_no_newline(&self, line: usize) -> usize {
+    pub fn line_len_no_newline(&self, line: usize) -> usize {
         let line_slice = self.rope.line(line);
         let len = line_slice.len_chars();
         if len > 0 {
@@ -343,48 +357,49 @@ impl Buffer {
         }
     }
 
-    /// Delete a range of characters [start, end), recording to undo stack.
-    pub fn delete_range(&mut self, start: usize, end: usize) {
+    pub fn delete_range(&mut self, start: usize, end: usize) -> String {
         if start >= end || start >= self.rope.len_chars() {
-            return;
+            return String::new();
         }
         let end = end.min(self.rope.len_chars());
         let cursor_before = self.cursor;
         let deleted: String = self.rope.slice(start..end).into();
-        self.yank_register = deleted.clone();
         self.rope.remove(start..end);
         self.modified = true;
+        self.version += 1;
         self.cursor = start.min(self.rope.len_chars().saturating_sub(1));
-        self.undo_stack.push_edit(
-            EditKind::Delete {
-                pos: start,
-                text: deleted,
-            },
-            cursor_before,
-        );
+
+        // Record into pending group if one is active (e.g. ChangeRange),
+        // otherwise create a standalone undo entry.
+        if self.undo_stack.pending.is_some() {
+            self.undo_stack.record_delete(start, &deleted);
+        } else {
+            self.undo_stack.push_edit(
+                EditKind::Delete {
+                    pos: start,
+                    text: deleted.clone(),
+                },
+                cursor_before,
+            );
+        }
+        deleted
     }
 
-    /// Yank (copy) a range of characters [start, end) without modifying buffer.
-    pub fn yank_range(&mut self, start: usize, end: usize) -> String {
+    pub fn yank_range(&self, start: usize, end: usize) -> String {
         let end = end.min(self.rope.len_chars());
         if start >= end {
             return String::new();
         }
-        let text: String = self.rope.slice(start..end).into();
-        self.yank_register = text.clone();
-        text
+        self.rope.slice(start..end).into()
     }
 
-    /// Paste yank register contents after cursor.
-    pub fn paste_after(&mut self) {
-        if self.yank_register.is_empty() {
+    pub fn paste_after(&mut self, text: &str) {
+        if text.is_empty() {
             return;
         }
         let cursor_before = self.cursor;
-        let text = self.yank_register.clone();
         let linewise = text.ends_with('\n');
         let pos = if linewise {
-            // Paste on the line below
             let line = self.rope.char_to_line(self.cursor);
             if line + 1 < self.rope.len_lines() {
                 self.rope.line_to_char(line + 1)
@@ -392,47 +407,49 @@ impl Buffer {
                 self.rope.len_chars()
             }
         } else {
-            (self.cursor + 1).min(self.rope.len_chars())
+            let len = self.rope.len_chars();
+            if self.cursor < len && self.rope.char(self.cursor) == '\n' {
+                self.cursor
+            } else {
+                (self.cursor + 1).min(len)
+            }
         };
-        self.rope.insert(pos, &text);
+        self.rope.insert(pos, text);
         if linewise {
             self.cursor = pos;
         } else {
             self.cursor = pos + text.chars().count() - 1;
         }
         self.modified = true;
+        self.version += 1;
         self.undo_stack
-            .push_edit(EditKind::Insert { pos, text }, cursor_before);
+            .push_edit(EditKind::Insert { pos, text: text.to_string() }, cursor_before);
     }
 
-    /// Paste yank register contents before cursor.
-    pub fn paste_before(&mut self) {
-        if self.yank_register.is_empty() {
+    pub fn paste_before(&mut self, text: &str) {
+        if text.is_empty() {
             return;
         }
         let cursor_before = self.cursor;
-        let text = self.yank_register.clone();
         let linewise = text.ends_with('\n');
         let pos = if linewise {
-            // Paste on the line above
             let line = self.rope.char_to_line(self.cursor);
             self.rope.line_to_char(line)
         } else {
             self.cursor
         };
-        self.rope.insert(pos, &text);
+        self.rope.insert(pos, text);
         if linewise {
             self.cursor = pos;
         } else {
             self.cursor = pos + text.chars().count() - 1;
         }
         self.modified = true;
+        self.version += 1;
         self.undo_stack
-            .push_edit(EditKind::Insert { pos, text }, cursor_before);
+            .push_edit(EditKind::Insert { pos, text: text.to_string() }, cursor_before);
     }
 
-    /// `iw` text object: inner word around cursor.
-    /// Returns (start, end) char offsets.
     pub fn text_object_inner_word(&self) -> (usize, usize) {
         let len = self.rope.len_chars();
         if len == 0 {
@@ -458,16 +475,12 @@ impl Buffer {
         (start, end)
     }
 
-    /// `aw` text object: a word around cursor (word + trailing whitespace).
-    /// Returns (start, end) char offsets.
     pub fn text_object_a_word(&self) -> (usize, usize) {
         let (start, mut end) = self.text_object_inner_word();
         let len = self.rope.len_chars();
-        // Include trailing whitespace
         while end < len && self.rope.char(end).is_whitespace() {
             end += 1;
         }
-        // If no trailing whitespace was consumed, try leading whitespace
         if end == self.text_object_inner_word().1 {
             let mut new_start = start;
             while new_start > 0 && self.rope.char(new_start - 1).is_whitespace() {
@@ -478,13 +491,10 @@ impl Buffer {
         (start, end)
     }
 
-    /// Set cursor to a raw char offset (clamped to valid range).
     pub fn set_cursor(&mut self, pos: usize) {
         self.cursor = pos.min(self.rope.len_chars().saturating_sub(1));
     }
 
-    /// Delimited text object: find matching `open`/`close` pair around cursor.
-    /// Returns (start, end) char offsets, or cursor pos if no match found.
     pub fn text_object_delimited(&self, open: char, close: char, include: bool) -> (usize, usize) {
         let len = self.rope.len_chars();
         if len == 0 {
@@ -492,7 +502,6 @@ impl Buffer {
         }
         let pos = self.cursor.min(len.saturating_sub(1));
 
-        // Search backward for unmatched open delimiter
         let mut depth = 0i32;
         let mut open_pos = None;
         let mut i = pos;
@@ -518,7 +527,6 @@ impl Buffer {
             None => return (pos, pos),
         };
 
-        // Search forward for matching close delimiter
         depth = 0;
         let mut close_pos = None;
         for j in (open_pos + 1)..len {
@@ -546,8 +554,6 @@ impl Buffer {
         }
     }
 
-    /// Quoted text object: find matching quote pair on current line containing cursor.
-    /// Returns (start, end) char offsets, or cursor pos if no match found.
     pub fn text_object_quoted(&self, quote: char, include: bool) -> (usize, usize) {
         let len = self.rope.len_chars();
         if len == 0 {
@@ -559,7 +565,6 @@ impl Buffer {
         let line_slice = self.rope.line(line);
         let line_len = line_slice.len_chars();
 
-        // Collect positions of all quote chars on this line
         let mut quotes = Vec::new();
         for i in 0..line_len {
             if line_slice.char(i) == quote {
@@ -567,7 +572,6 @@ impl Buffer {
             }
         }
 
-        // Find the pair that contains the cursor
         let mut pair_idx = 0;
         while pair_idx + 1 < quotes.len() {
             let q_start = quotes[pair_idx];
@@ -597,36 +601,6 @@ impl Buffer {
             start += pos + 1;
         }
         matches
-    }
-
-    pub fn find_next(&self, query: &str, from: usize) -> Option<usize> {
-        let matches = self.find_all(query);
-        if matches.is_empty() {
-            return None;
-        }
-        // Find first match at or after `from`
-        for &m in &matches {
-            if m >= from {
-                return Some(m);
-            }
-        }
-        // Wrap around
-        Some(matches[0])
-    }
-
-    pub fn find_prev(&self, query: &str, from: usize) -> Option<usize> {
-        let matches = self.find_all(query);
-        if matches.is_empty() {
-            return None;
-        }
-        // Find last match before `from`
-        for &m in matches.iter().rev() {
-            if m < from {
-                return Some(m);
-            }
-        }
-        // Wrap around
-        Some(*matches.last().unwrap())
     }
 
     pub fn find_char_on_line(&mut self, ch: char, forward: bool, stop_before: bool) -> bool {
@@ -665,23 +639,22 @@ impl Buffer {
         self.rope.remove(self.cursor..self.cursor + 1);
         self.rope.insert_char(self.cursor, ch);
         self.modified = true;
-        self.undo_stack.push_edit(
-            EditKind::Delete {
-                pos: self.cursor,
-                text: old,
-            },
-            cursor_before,
-        );
-        self.undo_stack.push_edit(
-            EditKind::Insert {
-                pos: self.cursor,
-                text: ch.to_string(),
-            },
+        self.version += 1;
+        self.undo_stack.push_edits(
+            vec![
+                EditKind::Delete {
+                    pos: self.cursor,
+                    text: old,
+                },
+                EditKind::Insert {
+                    pos: self.cursor,
+                    text: ch.to_string(),
+                },
+            ],
             cursor_before,
         );
     }
 
-    /// Saves a known buffer to its file path
     pub fn save(&mut self) -> anyhow::Result<()> {
         if self.read_only {
             anyhow::bail!("Cannot save read-only buffer");
@@ -700,5 +673,190 @@ impl Buffer {
         }
 
         Ok(())
+    }
+
+    pub fn cursor_after_motion(&self, motion: &Motion, count: usize) -> usize {
+        let mut pos = self.cursor;
+        let len = self.rope.len_chars();
+
+        for _ in 0..count {
+            match motion {
+                Motion::Left => {
+                    let line = self.rope.char_to_line(pos);
+                    let line_start = self.rope.line_to_char(line);
+                    if pos > line_start {
+                        pos -= 1;
+                    }
+                }
+                Motion::Right => {
+                    if pos < len {
+                        let line = self.rope.char_to_line(pos);
+                        let line_len = self.line_len_no_newline(line);
+                        let line_start = self.rope.line_to_char(line);
+                        let col = pos - line_start;
+                        if col < line_len {
+                            pos += 1;
+                        }
+                    }
+                }
+                Motion::Up => {
+                    let line = self.rope.char_to_line(pos);
+                    let line_start = self.rope.line_to_char(line);
+                    let col = pos - line_start;
+                    if line > 0 {
+                        let prev_line = line - 1;
+                        let prev_len = self.line_len_no_newline(prev_line);
+                        let new_col = col.min(prev_len);
+                        pos = self.rope.line_to_char(prev_line) + new_col;
+                    }
+                }
+                Motion::Down => {
+                    let line = self.rope.char_to_line(pos);
+                    let line_start = self.rope.line_to_char(line);
+                    let col = pos - line_start;
+                    if line + 1 < self.rope.len_lines() {
+                        let next_line = line + 1;
+                        let next_len = self.line_len_no_newline(next_line);
+                        let new_col = col.min(next_len);
+                        pos = self.rope.line_to_char(next_line) + new_col;
+                    }
+                }
+                Motion::WordForward => {
+                    if pos < len {
+                        while pos < len && !self.rope.char(pos).is_whitespace() {
+                            pos += 1;
+                        }
+                        while pos < len && self.rope.char(pos).is_whitespace() {
+                            pos += 1;
+                        }
+                    }
+                }
+                Motion::WordBackward => {
+                    if pos > 0 {
+                        while pos > 0 && self.rope.char(pos - 1).is_whitespace() {
+                            pos -= 1;
+                        }
+                        while pos > 0 && !self.rope.char(pos - 1).is_whitespace() {
+                            pos -= 1;
+                        }
+                    }
+                }
+                Motion::WordEnd => {
+                    if pos + 1 < len {
+                        pos += 1;
+                        while pos < len && self.rope.char(pos).is_whitespace() {
+                            pos += 1;
+                        }
+                        while pos + 1 < len && !self.rope.char(pos + 1).is_whitespace() {
+                            pos += 1;
+                        }
+                    }
+                }
+                Motion::LineStart => {
+                    let line = self.rope.char_to_line(pos);
+                    pos = self.rope.line_to_char(line);
+                }
+                Motion::LineEnd => {
+                    let line = self.rope.char_to_line(pos);
+                    pos = self.rope.line_to_char(line) + self.line_len_no_newline(line);
+                }
+                Motion::FirstNonWhitespace => {
+                    let line = self.rope.char_to_line(pos);
+                    let line_start = self.rope.line_to_char(line);
+                    let line_slice = self.rope.line(line);
+                    let mut offset = 0;
+                    for ch in line_slice.chars() {
+                        if ch == ' ' || ch == '\t' {
+                            offset += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    pos = line_start + offset;
+                }
+                Motion::FileStart => {
+                    pos = 0;
+                }
+                Motion::FileEnd => {
+                    pos = len;
+                }
+                Motion::FindChar {
+                    ch,
+                    forward,
+                    stop_before,
+                } => {
+                    let line = self.rope.char_to_line(pos);
+                    let line_start = self.rope.line_to_char(line);
+                    let col = pos - line_start;
+                    let line_len = self.line_len_no_newline(line);
+
+                    if *forward {
+                        for i in (col + 1)..line_len {
+                            if self.rope.char(line_start + i) == *ch {
+                                pos = line_start + if *stop_before { i - 1 } else { i };
+                                break;
+                            }
+                        }
+                    } else if col > 0 {
+                        for i in (0..col).rev() {
+                            if self.rope.char(line_start + i) == *ch {
+                                pos = line_start + if *stop_before { i + 1 } else { i };
+                                break;
+                            }
+                        }
+                    }
+                }
+                Motion::HalfPageDown | Motion::HalfPageUp => {
+                    // These need viewport info; handled at a higher level
+                }
+            }
+        }
+        pos
+    }
+}
+
+impl BufferQuery for Buffer {
+    fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    fn cursor_position(&self) -> (usize, usize) {
+        self.cursor_position()
+    }
+
+    fn len_chars(&self) -> usize {
+        self.rope.len_chars()
+    }
+
+    fn total_lines(&self) -> usize {
+        self.rope.len_lines()
+    }
+
+    fn line_to_char(&self, line: usize) -> usize {
+        self.rope.line_to_char(line)
+    }
+
+    fn char_to_line(&self, pos: usize) -> usize {
+        self.rope.char_to_line(pos)
+    }
+
+    fn text_object_inner_word(&self) -> (usize, usize) {
+        self.text_object_inner_word()
+    }
+
+    fn text_object_a_word(&self) -> (usize, usize) {
+        self.text_object_a_word()
+    }
+
+    fn text_object_delimited(&self, open: char, close: char, include: bool) -> (usize, usize) {
+        self.text_object_delimited(open, close, include)
+    }
+
+    fn text_object_quoted(&self, quote: char, include: bool) -> (usize, usize) {
+        self.text_object_quoted(quote, include)
+    }
+
+    fn cursor_after_motion(&self, motion: &Motion, count: usize) -> usize {
+        self.cursor_after_motion(motion, count)
     }
 }

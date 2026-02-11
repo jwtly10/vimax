@@ -1,10 +1,12 @@
+mod action;
 mod app;
 mod buffer;
-mod command;
-mod input;
-mod keymap;
+mod editor;
+mod registers;
 mod text_grid;
 mod undo;
+mod vim;
+mod viewport;
 
 use app::Remax;
 use tracing::info;
