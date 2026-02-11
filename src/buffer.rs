@@ -1,9 +1,12 @@
+use std::path::Path;
+
 use ropey::Rope;
 
 pub struct Buffer {
     rope: Rope,
     cursor: usize,
     name: String,
+    file_path: Option<String>,
 }
 
 impl Buffer {
@@ -12,6 +15,16 @@ impl Buffer {
             rope: Rope::new(),
             cursor: 0,
             name: String::from("*scratch*"),
+            file_path: None,
+        }
+    }
+
+    pub fn from_str(s: &str, buf_name: &str, file_path: &Path) -> Self {
+        Self {
+            rope: Rope::from_str(s),
+            cursor: 0,
+            name: String::from(buf_name),
+            file_path: Some(file_path.to_string_lossy().to_string()),
         }
     }
 

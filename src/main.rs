@@ -80,10 +80,27 @@ impl Remax {
     }
 
     fn boot() -> (Self, Task<Message>) {
-        let mut buffer = Buffer::new();
-        buffer.set_name("*scratch*");
-        buffer.insert_str("Welcome to remax.\n\nPress 'i' to enter insert mode.\nPress 'Esc' to return to normal mode.\nUse h/j/k/l to navigate.");
-        buffer.move_to_start();
+        let args = parse_args();
+        let file_path = args.get(0); // TODO: Assuming the first is always file path
+
+        let buffer: Buffer;
+
+        if file_path.is_some() {
+            let path = std::path::Path::new(file_path.unwrap());
+            let buf_name = path.file_name().unwrap_or_default().to_string_lossy();
+            debug!(?path, "attempting to read file into buffer");
+            match std::fs::read_to_string(path) {
+                Ok(content) => buffer = Buffer::from_str(&content, &buf_name, &path),
+                Err(e) => {
+                    debug!(?e, "failed to read file, starting with empty buffer");
+                    buffer = create_scratch_buffer();
+                }
+            }
+        } else {
+            debug!("no file path provided, starting with empty buffer");
+            buffer = create_scratch_buffer();
+        }
+
         info!("editor booted");
         (
             Self {
@@ -380,4 +397,24 @@ impl Remax {
             })
             .into()
     }
+}
+
+/// Parses args that were passed in when launching the app
+fn parse_args() -> Vec<String> {
+    let args = std::env::args();
+    if args.len() > 1 {
+        info!(?args, "launch args");
+        args.skip(1).collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// Creates a new scratch buffer with welcome text.
+fn create_scratch_buffer() -> Buffer {
+    let mut buffer = Buffer::new();
+    buffer.set_name("*scratch*");
+    buffer.insert_str("Welcome to remax.\n\nPress 'i' to enter insert mode.\nPress 'Esc' to return to normal mode.\nUse h/j/k/l to navigate.");
+    buffer.move_to_start();
+    buffer
 }
