@@ -18,17 +18,19 @@ pub struct TextGrid<'a> {
     buffer: &'a Buffer,
     scroll_y: usize,
     scroll_x: usize,
+    selection: Option<(usize, usize)>,
 }
 
-pub fn text_grid(buffer: &Buffer, scroll_y: usize, scroll_x: usize) -> Element<'_, crate::Message> {
+pub fn text_grid(buffer: &Buffer, scroll_y: usize, scroll_x: usize, selection: Option<(usize, usize)>) -> Element<'_, crate::app::Message> {
     Element::new(TextGrid {
         buffer,
         scroll_y,
         scroll_x,
+        selection,
     })
 }
 
-impl<'a> Widget<crate::Message, iced::Theme, iced::Renderer> for TextGrid<'a> {
+impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'a> {
     fn size(&self) -> Size<Length> {
         Size {
             width: Length::Fill,
@@ -54,7 +56,7 @@ impl<'a> Widget<crate::Message, iced::Theme, iced::Renderer> for TextGrid<'a> {
         cursor: mouse::Cursor,
         _renderer: &iced::Renderer,
         _clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, crate::Message>,
+        shell: &mut Shell<'_, crate::app::Message>,
         _viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
@@ -71,14 +73,14 @@ impl<'a> Widget<crate::Message, iced::Theme, iced::Renderer> for TextGrid<'a> {
                         mouse::ScrollDelta::Pixels { x, .. } => *x / CHAR_WIDTH,
                     };
                     if cols.abs() > 0.1 {
-                        shell.publish(crate::Message::ScrollCols(cols));
+                        shell.publish(crate::app::Message::ScrollCols(cols));
                     }
-                    shell.publish(crate::Message::ScrollLines(lines));
+                    shell.publish(crate::app::Message::ScrollLines(lines));
                 }
             }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if let Some(pos) = cursor.position_in(bounds) {
-                    shell.publish(crate::Message::MouseClick { x: pos.x, y: pos.y });
+                    shell.publish(crate::app::Message::MouseClick { x: pos.x, y: pos.y });
                 }
             }
             // Report viewport size on window resize events
@@ -86,7 +88,7 @@ impl<'a> Widget<crate::Message, iced::Theme, iced::Renderer> for TextGrid<'a> {
                 let visible_lines = (bounds.height / LINE_HEIGHT) as usize;
                 let text_area_width = bounds.width - GUTTER_WIDTH - 8.0;
                 let visible_cols = (text_area_width / CHAR_WIDTH).max(1.0) as usize;
-                shell.publish(crate::Message::ViewportResized {
+                shell.publish(crate::app::Message::ViewportResized {
                     lines: visible_lines,
                     cols: visible_cols,
                 });
@@ -164,6 +166,47 @@ impl<'a> Widget<crate::Message, iced::Theme, iced::Renderer> for TextGrid<'a> {
                 line_num_color,
                 *viewport,
             );
+
+            // Selection highlight
+            if let Some((sel_start, sel_end)) = self.selection {
+                let line_start_char = rope.line_to_char(line_idx);
+                let line_end_char = if line_idx + 1 < total_lines {
+                    rope.line_to_char(line_idx + 1)
+                } else {
+                    rope.len_chars()
+                };
+
+                // Check if this line overlaps with the selection
+                if sel_start < line_end_char && sel_end > line_start_char {
+                    let sel_col_start = sel_start.saturating_sub(line_start_char);
+                    let sel_col_end = if sel_end < line_end_char {
+                        sel_end - line_start_char
+                    } else {
+                        rope.line(line_idx).len_chars()
+                    };
+
+                    if sel_col_end > scroll_x && sel_col_start < scroll_x + (bounds.width / CHAR_WIDTH) as usize {
+                        let draw_start = sel_col_start.saturating_sub(scroll_x);
+                        let draw_end = sel_col_end.saturating_sub(scroll_x);
+                        let text_x = bounds.x + GUTTER_WIDTH + 8.0;
+                        let sel_x = text_x + (draw_start as f32 * CHAR_WIDTH);
+                        let sel_w = ((draw_end - draw_start) as f32 * CHAR_WIDTH).min(bounds.width - (sel_x - bounds.x));
+
+                        renderer.fill_quad(
+                            renderer::Quad {
+                                bounds: Rectangle {
+                                    x: sel_x,
+                                    y,
+                                    width: sel_w,
+                                    height: LINE_HEIGHT,
+                                },
+                                ..renderer::Quad::default()
+                            },
+                            Color::from_rgba(0.3, 0.5, 0.8, 0.4),
+                        );
+                    }
+                }
+            }
 
             // Line content (with horizontal scroll)
             let line = rope.line(line_idx);
@@ -244,7 +287,7 @@ impl<'a> Widget<crate::Message, iced::Theme, iced::Renderer> for TextGrid<'a> {
     }
 }
 
-impl<'a> From<TextGrid<'a>> for Element<'a, crate::Message> {
+impl<'a> From<TextGrid<'a>> for Element<'a, crate::app::Message> {
     fn from(grid: TextGrid<'a>) -> Self {
         Element::new(grid)
     }

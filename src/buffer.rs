@@ -13,6 +13,7 @@ pub struct Buffer {
     file_path: Option<String>,
     modified: bool,
     undo_stack: UndoStack,
+    pub yank_register: String,
 }
 
 impl Buffer {
@@ -25,6 +26,7 @@ impl Buffer {
             file_path: None,
             modified: false,
             undo_stack: UndoStack::new(),
+            yank_register: String::new(),
         }
     }
 
@@ -37,6 +39,7 @@ impl Buffer {
             file_path: Some(file_path.to_string_lossy().to_string()),
             modified: false,
             undo_stack: UndoStack::new(),
+            yank_register: String::new(),
         }
     }
 
@@ -195,12 +198,20 @@ impl Buffer {
 
     pub fn move_left(&mut self) {
         if self.cursor > 0 {
+            let (_, col) = self.cursor_position();
+            if col == 0 {
+                return;
+            }
             self.cursor -= 1;
         }
     }
 
     pub fn move_right(&mut self) {
         if self.cursor < self.rope.len_chars() {
+            let (line, col) = self.cursor_position();
+            if col == self.line_len_no_newline(line) {
+                return;
+            }
             self.cursor += 1;
         }
     }
@@ -330,6 +341,248 @@ impl Buffer {
         } else {
             0
         }
+    }
+
+    /// Delete a range of characters [start, end), recording to undo stack.
+    pub fn delete_range(&mut self, start: usize, end: usize) {
+        if start >= end || start >= self.rope.len_chars() {
+            return;
+        }
+        let end = end.min(self.rope.len_chars());
+        let cursor_before = self.cursor;
+        let deleted: String = self.rope.slice(start..end).into();
+        self.yank_register = deleted.clone();
+        self.rope.remove(start..end);
+        self.modified = true;
+        self.cursor = start.min(self.rope.len_chars().saturating_sub(1));
+        self.undo_stack.push_edit(
+            EditKind::Delete {
+                pos: start,
+                text: deleted,
+            },
+            cursor_before,
+        );
+    }
+
+    /// Yank (copy) a range of characters [start, end) without modifying buffer.
+    pub fn yank_range(&mut self, start: usize, end: usize) -> String {
+        let end = end.min(self.rope.len_chars());
+        if start >= end {
+            return String::new();
+        }
+        let text: String = self.rope.slice(start..end).into();
+        self.yank_register = text.clone();
+        text
+    }
+
+    /// Paste yank register contents after cursor.
+    pub fn paste_after(&mut self) {
+        if self.yank_register.is_empty() {
+            return;
+        }
+        let cursor_before = self.cursor;
+        let text = self.yank_register.clone();
+        let linewise = text.ends_with('\n');
+        let pos = if linewise {
+            // Paste on the line below
+            let line = self.rope.char_to_line(self.cursor);
+            if line + 1 < self.rope.len_lines() {
+                self.rope.line_to_char(line + 1)
+            } else {
+                self.rope.len_chars()
+            }
+        } else {
+            (self.cursor + 1).min(self.rope.len_chars())
+        };
+        self.rope.insert(pos, &text);
+        if linewise {
+            self.cursor = pos;
+        } else {
+            self.cursor = pos + text.chars().count() - 1;
+        }
+        self.modified = true;
+        self.undo_stack
+            .push_edit(EditKind::Insert { pos, text }, cursor_before);
+    }
+
+    /// Paste yank register contents before cursor.
+    pub fn paste_before(&mut self) {
+        if self.yank_register.is_empty() {
+            return;
+        }
+        let cursor_before = self.cursor;
+        let text = self.yank_register.clone();
+        let linewise = text.ends_with('\n');
+        let pos = if linewise {
+            // Paste on the line above
+            let line = self.rope.char_to_line(self.cursor);
+            self.rope.line_to_char(line)
+        } else {
+            self.cursor
+        };
+        self.rope.insert(pos, &text);
+        if linewise {
+            self.cursor = pos;
+        } else {
+            self.cursor = pos + text.chars().count() - 1;
+        }
+        self.modified = true;
+        self.undo_stack
+            .push_edit(EditKind::Insert { pos, text }, cursor_before);
+    }
+
+    /// `iw` text object: inner word around cursor.
+    /// Returns (start, end) char offsets.
+    pub fn text_object_inner_word(&self) -> (usize, usize) {
+        let len = self.rope.len_chars();
+        if len == 0 {
+            return (0, 0);
+        }
+        let pos = self.cursor.min(len.saturating_sub(1));
+        let ch = self.rope.char(pos);
+        let is_word_char = |c: char| !c.is_whitespace();
+        let classifier: fn(char) -> bool = if is_word_char(ch) {
+            is_word_char
+        } else {
+            |c: char| c.is_whitespace()
+        };
+
+        let mut start = pos;
+        while start > 0 && classifier(self.rope.char(start - 1)) {
+            start -= 1;
+        }
+        let mut end = pos;
+        while end < len && classifier(self.rope.char(end)) {
+            end += 1;
+        }
+        (start, end)
+    }
+
+    /// `aw` text object: a word around cursor (word + trailing whitespace).
+    /// Returns (start, end) char offsets.
+    pub fn text_object_a_word(&self) -> (usize, usize) {
+        let (start, mut end) = self.text_object_inner_word();
+        let len = self.rope.len_chars();
+        // Include trailing whitespace
+        while end < len && self.rope.char(end).is_whitespace() {
+            end += 1;
+        }
+        // If no trailing whitespace was consumed, try leading whitespace
+        if end == self.text_object_inner_word().1 {
+            let mut new_start = start;
+            while new_start > 0 && self.rope.char(new_start - 1).is_whitespace() {
+                new_start -= 1;
+            }
+            return (new_start, end);
+        }
+        (start, end)
+    }
+
+    /// Set cursor to a raw char offset (clamped to valid range).
+    pub fn set_cursor(&mut self, pos: usize) {
+        self.cursor = pos.min(self.rope.len_chars().saturating_sub(1));
+    }
+
+    /// Delimited text object: find matching `open`/`close` pair around cursor.
+    /// Returns (start, end) char offsets, or cursor pos if no match found.
+    pub fn text_object_delimited(&self, open: char, close: char, include: bool) -> (usize, usize) {
+        let len = self.rope.len_chars();
+        if len == 0 {
+            return (0, 0);
+        }
+        let pos = self.cursor.min(len.saturating_sub(1));
+
+        // Search backward for unmatched open delimiter
+        let mut depth = 0i32;
+        let mut open_pos = None;
+        let mut i = pos;
+        loop {
+            let ch = self.rope.char(i);
+            if ch == close && i != pos {
+                depth += 1;
+            } else if ch == open {
+                if depth == 0 {
+                    open_pos = Some(i);
+                    break;
+                }
+                depth -= 1;
+            }
+            if i == 0 {
+                break;
+            }
+            i -= 1;
+        }
+
+        let open_pos = match open_pos {
+            Some(p) => p,
+            None => return (pos, pos),
+        };
+
+        // Search forward for matching close delimiter
+        depth = 0;
+        let mut close_pos = None;
+        for j in (open_pos + 1)..len {
+            let ch = self.rope.char(j);
+            if ch == open {
+                depth += 1;
+            } else if ch == close {
+                if depth == 0 {
+                    close_pos = Some(j);
+                    break;
+                }
+                depth -= 1;
+            }
+        }
+
+        let close_pos = match close_pos {
+            Some(p) => p,
+            None => return (pos, pos),
+        };
+
+        if include {
+            (open_pos, close_pos + 1)
+        } else {
+            (open_pos + 1, close_pos)
+        }
+    }
+
+    /// Quoted text object: find matching quote pair on current line containing cursor.
+    /// Returns (start, end) char offsets, or cursor pos if no match found.
+    pub fn text_object_quoted(&self, quote: char, include: bool) -> (usize, usize) {
+        let len = self.rope.len_chars();
+        if len == 0 {
+            return (0, 0);
+        }
+        let pos = self.cursor.min(len.saturating_sub(1));
+        let line = self.rope.char_to_line(pos);
+        let line_start = self.rope.line_to_char(line);
+        let line_slice = self.rope.line(line);
+        let line_len = line_slice.len_chars();
+
+        // Collect positions of all quote chars on this line
+        let mut quotes = Vec::new();
+        for i in 0..line_len {
+            if line_slice.char(i) == quote {
+                quotes.push(line_start + i);
+            }
+        }
+
+        // Find the pair that contains the cursor
+        let mut pair_idx = 0;
+        while pair_idx + 1 < quotes.len() {
+            let q_start = quotes[pair_idx];
+            let q_end = quotes[pair_idx + 1];
+            if pos >= q_start && pos <= q_end {
+                return if include {
+                    (q_start, q_end + 1)
+                } else {
+                    (q_start + 1, q_end)
+                };
+            }
+            pair_idx += 2;
+        }
+
+        (pos, pos)
     }
 
     /// Saves a known buffer to its file path
