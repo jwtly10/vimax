@@ -383,7 +383,6 @@ impl Remax {
         let (cursor_line, cursor_col) = self.buffer.cursor_position();
 
         let grid = text_grid::text_grid(&self.buffer, self.scroll_y, self.scroll_x);
-
         let mode_label = text(format!(" {} ", self.vim_mode))
             .size(14)
             .color(match self.vim_mode {
@@ -391,7 +390,9 @@ impl Remax {
                 VimMode::Insert => iced::Color::from_rgb(0.6, 1.0, 0.6),
             });
 
-        let buffer_name = text(format!(" {} ", self.buffer.name()))
+        let modified_indicator = if self.buffer.is_modified() { "[+]" } else { "" };
+
+        let buffer_name = text(format!(" {} {}", self.buffer.name(), modified_indicator))
             .size(14)
             .color(iced::Color::from_rgb(0.8, 0.8, 0.8));
 

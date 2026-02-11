@@ -8,6 +8,7 @@ pub struct Buffer {
     cursor: usize,
     name: String,
     file_path: Option<String>,
+    modified: bool,
 }
 
 impl Buffer {
@@ -18,6 +19,7 @@ impl Buffer {
             cursor: 0,
             name: String::from("untitled"),
             file_path: None,
+            modified: false,
         }
     }
 
@@ -28,6 +30,7 @@ impl Buffer {
             cursor: 0,
             name: String::from(buf_name),
             file_path: Some(file_path.to_string_lossy().to_string()),
+            modified: false,
         }
     }
 
@@ -37,6 +40,10 @@ impl Buffer {
 
     pub fn set_name(&mut self, name: &str) {
         self.name = name.to_string();
+    }
+
+    pub fn is_modified(&self) -> bool {
+        self.modified
     }
 
     pub fn rope(&self) -> &Rope {
@@ -56,17 +63,20 @@ impl Buffer {
     }
 
     pub fn insert_char(&mut self, ch: char) {
+        self.modified = true;
         self.rope.insert_char(self.cursor, ch);
         self.cursor += 1;
     }
 
     pub fn insert_str(&mut self, s: &str) {
+        self.modified = true;
         self.rope.insert(self.cursor, s);
         self.cursor += s.chars().count();
     }
 
     pub fn delete_char_backward(&mut self) {
         if self.cursor > 0 {
+            self.modified = true;
             self.cursor -= 1;
             self.rope.remove(self.cursor..self.cursor + 1);
         }
@@ -74,6 +84,7 @@ impl Buffer {
 
     pub fn delete_char_forward(&mut self) {
         if self.cursor < self.rope.len_chars() {
+            self.modified = true;
             self.rope.remove(self.cursor..self.cursor + 1);
         }
     }
@@ -229,6 +240,7 @@ impl Buffer {
             let writer = std::io::BufWriter::new(file);
             self.rope.write_to(writer)?;
             std::fs::rename(temp_path, path)?;
+            self.modified = false;
         } else {
             anyhow::bail!("Cannot save buffer without a file path");
         }
