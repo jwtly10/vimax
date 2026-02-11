@@ -135,18 +135,14 @@ impl InputState {
         mode_keymap: &Keymap,
     ) -> VimAction {
         // Global keymaps take precidence
-        if modifiers.control() || modifiers.command() || modifiers.alt() {
-            if let Some(kp) = KeyPress::from_iced(modified_key, modifiers) {
-                match global_keymap.lookup(&[kp]) {
-                    KeymapLookup::Match(cmd) => {
-                        return VimAction::Dispatch {
-                            command: cmd,
-                            ctx: CommandCtx { count: 1 },
-                        };
-                    }
-                    _ => {}
-                }
-            }
+        if (modifiers.control() || modifiers.command() || modifiers.alt())
+            && let Some(kp) = KeyPress::from_iced(modified_key, modifiers)
+            && let KeymapLookup::Match(cmd) = global_keymap.lookup(&[kp])
+        {
+            return VimAction::Dispatch {
+                command: cmd,
+                ctx: CommandCtx { count: 1 },
+            };
         }
 
         match self.mode {
@@ -173,12 +169,12 @@ impl InputState {
             let s = c.as_str();
             if s.len() == 1 {
                 let ch = s.chars().next().unwrap();
-                if ch.is_ascii_digit() {
-                    if ch != '0' || self.count_accum.is_some() {
-                        let current = self.count_accum.unwrap_or(0);
-                        self.count_accum = Some(current * 10 + (ch as usize - '0' as usize));
-                        return VimAction::Pending;
-                    }
+                if ch.is_ascii_digit()
+                    && (ch != '0' || self.count_accum.is_some())
+                {
+                    let current = self.count_accum.unwrap_or(0);
+                    self.count_accum = Some(current * 10 + (ch as usize - '0' as usize));
+                    return VimAction::Pending;
                 }
             }
         }
@@ -324,20 +320,20 @@ impl InputState {
         text: Option<&str>,
     ) -> VimAction {
         // Check named keys/modifier keys shortcuts first
-        if let Some(kp) = KeyPress::from_iced(key, modifiers) {
-            if matches!(kp.key, crate::keymap::KeyId::Named(_)) {
-                match keymap.lookup(&[kp]) {
-                    KeymapLookup::Match(cmd) => {
-                        return VimAction::Dispatch {
-                            command: cmd,
-                            ctx: CommandCtx { count: 1 },
-                        };
-                    }
-                    _ => {
-                        // Space falls through to OS text handling - technically a 'named' key
-                        if !matches!(key, keyboard::Key::Named(keyboard::key::Named::Space)) {
-                            return VimAction::Unhandled;
-                        }
+        if let Some(kp) = KeyPress::from_iced(key, modifiers)
+            && matches!(kp.key, crate::keymap::KeyId::Named(_))
+        {
+            match keymap.lookup(&[kp]) {
+                KeymapLookup::Match(cmd) => {
+                    return VimAction::Dispatch {
+                        command: cmd,
+                        ctx: CommandCtx { count: 1 },
+                    };
+                }
+                _ => {
+                    // Space falls through to OS text handling - technically a 'named' key
+                    if !matches!(key, keyboard::Key::Named(keyboard::key::Named::Space)) {
+                        return VimAction::Unhandled;
                     }
                 }
             }
@@ -387,12 +383,13 @@ impl InputState {
                     return VimAction::Pending;
                 }
                 // Not a text object starter — try count accumulation then keymap
-                if let KeyId::Char(ch) = kp.key {
-                    if ch.is_ascii_digit() && (ch != '0' || self.count_accum.is_some()) {
-                        let current = self.count_accum.unwrap_or(0);
-                        self.count_accum = Some(current * 10 + (ch as usize - '0' as usize));
-                        return VimAction::Pending;
-                    }
+                if let KeyId::Char(ch) = kp.key
+                    && ch.is_ascii_digit()
+                    && (ch != '0' || self.count_accum.is_some())
+                {
+                    let current = self.count_accum.unwrap_or(0);
+                    self.count_accum = Some(current * 10 + (ch as usize - '0' as usize));
+                    return VimAction::Pending;
                 }
                 self.pending_keys.push(kp);
             }
