@@ -4,6 +4,7 @@ use ropey::Rope;
 
 pub struct Buffer {
     rope: Rope,
+    read_only: bool,
     cursor: usize,
     name: String,
     file_path: Option<String>,
@@ -13,15 +14,17 @@ impl Buffer {
     pub fn new() -> Self {
         Self {
             rope: Rope::new(),
+            read_only: false,
             cursor: 0,
-            name: String::from("*scratch*"),
+            name: String::from("untitled"),
             file_path: None,
         }
     }
 
-    pub fn from_str(s: &str, buf_name: &str, file_path: &Path) -> Self {
+    pub fn from_str(s: &str, buf_name: &str, file_path: &Path, read_only: bool) -> Self {
         Self {
             rope: Rope::from_str(s),
+            read_only,
             cursor: 0,
             name: String::from(buf_name),
             file_path: Some(file_path.to_string_lossy().to_string()),
@@ -212,5 +215,24 @@ impl Buffer {
         } else {
             0
         }
+    }
+
+    /// Saves a known buffer to its file path
+    pub fn save(&mut self) -> anyhow::Result<()> {
+        if self.read_only {
+            anyhow::bail!("Cannot save read-only buffer");
+        }
+
+        if let Some(ref path) = self.file_path {
+            let temp_path = format!("{}.tmp", path);
+            let file = std::fs::File::create(&temp_path)?;
+            let writer = std::io::BufWriter::new(file);
+            self.rope.write_to(writer)?;
+            std::fs::rename(temp_path, path)?;
+        } else {
+            anyhow::bail!("Cannot save buffer without a file path");
+        }
+
+        Ok(())
     }
 }

@@ -6,7 +6,7 @@ use iced::keyboard;
 use iced::widget::Space;
 use iced::widget::{column, container, row, text};
 use iced::{Element, Length, Subscription, Task, Theme, event};
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 fn main() -> iced::Result {
     tracing_subscriber::fmt()
@@ -90,7 +90,7 @@ impl Remax {
             let buf_name = path.file_name().unwrap_or_default().to_string_lossy();
             debug!(?path, "attempting to read file into buffer");
             match std::fs::read_to_string(path) {
-                Ok(content) => buffer = Buffer::from_str(&content, &buf_name, &path),
+                Ok(content) => buffer = Buffer::from_str(&content, &buf_name, &path, false),
                 Err(e) => {
                     debug!(?e, "failed to read file, starting with empty buffer");
                     buffer = create_scratch_buffer();
@@ -149,6 +149,13 @@ impl Remax {
                     ?text,
                     "key event"
                 );
+
+                // Global shorts overwrite anything handled by the vim layer
+                if self.handle_global_key(&modified_key, &modifiers) {
+                    self.ensure_cursor_visible();
+                    return Task::none();
+                }
+
                 match self.vim_mode {
                     VimMode::Normal => self.handle_normal_key(&modified_key, &modifiers),
                     VimMode::Insert => self.handle_insert_key(&key, &modifiers, text.as_deref()),
@@ -220,6 +227,30 @@ impl Remax {
         } else if cursor_col >= self.scroll_x + self.visible_cols {
             self.scroll_x = cursor_col + 1 + h_margin - self.visible_cols;
         }
+    }
+
+    /// Handles global shortcuts that work in any mode
+    fn handle_global_key(&mut self, key: &keyboard::Key, modifiers: &keyboard::Modifiers) -> bool {
+        if modifiers.command() {
+            match key {
+                keyboard::Key::Character(c) => match c.as_str() {
+                    "s" => {
+                        debug!("save shortcut triggered");
+                        // TODO: Need some error propogation
+                        let res = self.buffer.save();
+                        if let Err(e) = res {
+                            error!(?e, "failed to save file");
+                        } else {
+                            info!("file saved successfully");
+                        }
+                        return true;
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        false
     }
 
     /// Normal mode: we match on `modified_key` which already has shift applied.
@@ -331,7 +362,9 @@ impl Remax {
                     self.buffer.move_down();
                     return;
                 }
-                keyboard::key::Named::Space => self.buffer.insert_char(' '),
+                keyboard::key::Named::Space => {
+                    // fall through - let OS handle space char
+                }
                 _ => return,
             }
         }
