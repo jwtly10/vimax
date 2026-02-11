@@ -28,7 +28,7 @@ fn main() -> iced::Result {
 }
 
 const SCROLL_MARGIN: usize = 5;
-const SCROLL_SPEED: f32 = 3.0;
+const SCROLL_SPEED: f32 = 0.3;
 
 struct Remax {
     buffer: Buffer,
@@ -190,14 +190,12 @@ impl Remax {
                 let new_y = (self.scroll_y as f32 - delta * SCROLL_SPEED).round();
                 let max_scroll = total.saturating_sub(1);
                 self.scroll_y = (new_y.max(0.0) as usize).min(max_scroll);
-                debug!(delta, scroll_y = self.scroll_y, "scrolled lines");
             }
             Message::ScrollCols(delta) => {
                 let total = self.buffer.max_line_len();
                 let new_x = (self.scroll_x as f32 - delta * SCROLL_SPEED).round();
                 let max_scroll = total.saturating_sub(1);
                 self.scroll_x = (new_x.max(0.0) as usize).min(max_scroll);
-                debug!(delta, scroll_x = self.scroll_x, "scrolled cols");
             }
             Message::MouseClick { x, y } => {
                 let line = self.scroll_y + (y / text_grid::LINE_HEIGHT) as usize;
