@@ -35,6 +35,7 @@ struct Remax {
     scroll_x: usize,
     visible_lines: usize,
     visible_cols: usize,
+    pending_normal_key: Option<char>, // Quick multi-key commands
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +111,7 @@ impl Remax {
                 scroll_x: 0,
                 visible_lines: 40,
                 visible_cols: 80,
+                pending_normal_key: None,
             },
             Task::none(),
         )
@@ -255,8 +257,21 @@ impl Remax {
 
     /// Normal mode: we match on `modified_key` which already has shift applied.
     fn handle_normal_key(&mut self, key: &keyboard::Key, _modifiers: &keyboard::Modifiers) {
+        if let Some(pending) = self.pending_normal_key.take() {
+            if let keyboard::Key::Character(c) = key {
+                match (pending, c.as_str()) {
+                    ('g', "g") => self.buffer.move_to_start(),
+                    ('d', "d") => self.buffer.delete_line(),
+                    _ => {}
+                }
+            }
+            return;
+        }
         match key {
             keyboard::Key::Character(c) => match c.as_str() {
+                "g" | "d" => {
+                    self.pending_normal_key = Some(c.as_str().chars().next().unwrap());
+                }
                 "i" => {
                     info!("entering insert mode");
                     self.vim_mode = VimMode::Insert;

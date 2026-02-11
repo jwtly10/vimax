@@ -74,6 +74,19 @@ impl Buffer {
         self.cursor += s.chars().count();
     }
 
+    pub fn delete_line(&mut self) {
+        let (line, _) = self.cursor_position();
+        let line_start = self.rope.line_to_char(line);
+        let line_end = if line + 1 < self.rope.len_lines() {
+            self.rope.line_to_char(line + 1)
+        } else {
+            self.rope.len_chars()
+        };
+        self.rope.remove(line_start..line_end);
+        self.modified = true;
+        self.cursor = line_start.min(self.rope.len_chars());
+    }
+
     pub fn delete_char_backward(&mut self) {
         if self.cursor > 0 {
             self.modified = true;
