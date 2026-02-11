@@ -1,5 +1,6 @@
 mod buffer;
 mod text_grid;
+mod undo;
 
 use buffer::Buffer;
 use iced::keyboard;
@@ -233,6 +234,14 @@ impl Remax {
 
     /// Handles global shortcuts that work in any mode
     fn handle_global_key(&mut self, key: &keyboard::Key, modifiers: &keyboard::Modifiers) -> bool {
+        if modifiers.control() {
+            if let keyboard::Key::Character(c) = key {
+                if c.as_str() == "r" {
+                    self.buffer.redo();
+                    return true;
+                }
+            }
+        }
         if modifiers.command() {
             match key {
                 keyboard::Key::Character(c) => match c.as_str() {
@@ -272,30 +281,37 @@ impl Remax {
                 "g" | "d" => {
                     self.pending_normal_key = Some(c.as_str().chars().next().unwrap());
                 }
+                "u" => self.buffer.undo(),
                 "i" => {
                     info!("entering insert mode");
+                    self.buffer.start_edit_group();
                     self.vim_mode = VimMode::Insert;
                 }
                 "a" => {
+                    self.buffer.start_edit_group();
                     self.buffer.move_right();
                     self.vim_mode = VimMode::Insert;
                 }
                 "o" => {
+                    self.buffer.start_edit_group();
                     self.buffer.move_to_line_end();
                     self.buffer.insert_char('\n');
                     self.vim_mode = VimMode::Insert;
                 }
                 "O" => {
+                    self.buffer.start_edit_group();
                     self.buffer.move_to_line_start();
                     self.buffer.insert_char('\n');
                     self.buffer.move_up();
                     self.vim_mode = VimMode::Insert;
                 }
                 "A" => {
+                    self.buffer.start_edit_group();
                     self.buffer.move_to_line_end();
                     self.vim_mode = VimMode::Insert;
                 }
                 "I" => {
+                    self.buffer.start_edit_group();
                     self.buffer.move_to_line_start();
                     self.vim_mode = VimMode::Insert;
                 }
@@ -342,6 +358,7 @@ impl Remax {
             match named {
                 keyboard::key::Named::Escape => {
                     info!("entering normal mode");
+                    self.buffer.finish_edit_group();
                     self.vim_mode = VimMode::Normal;
                     return;
                 }

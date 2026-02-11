@@ -1,3 +1,5 @@
+use crate::undo::{EditKind, UndoStack};
+
 use std::path::Path;
 
 use ropey::Rope;
@@ -9,6 +11,7 @@ pub struct Buffer {
     name: String,
     file_path: Option<String>,
     modified: bool,
+    undo_stack: UndoStack,
 }
 
 impl Buffer {
@@ -20,6 +23,7 @@ impl Buffer {
             name: String::from("untitled"),
             file_path: None,
             modified: false,
+            undo_stack: UndoStack::new(),
         }
     }
 
@@ -31,6 +35,7 @@ impl Buffer {
             name: String::from(buf_name),
             file_path: Some(file_path.to_string_lossy().to_string()),
             modified: false,
+            undo_stack: UndoStack::new(),
         }
     }
 
@@ -62,19 +67,78 @@ impl Buffer {
         (line, col)
     }
 
+    pub fn start_edit_group(&mut self) {
+        self.undo_stack.start_group(self.cursor);
+    }
+
+    pub fn finish_edit_group(&mut self) {
+        self.undo_stack.finish_group();
+    }
+
+    /// Undo the last edit group.
+    pub fn undo(&mut self) {
+        if let Some(group) = self.undo_stack.undo.pop() {
+            for edit in group.edits.iter().rev() {
+                match edit {
+                    EditKind::Insert { pos, text } => {
+                        self.rope.remove(*pos..*pos + text.len());
+                    }
+                    EditKind::Delete { pos, text } => {
+                        self.rope.insert(*pos, text);
+                    }
+                }
+            }
+            self.cursor = group.cursor_before;
+            self.modified = true;
+            self.undo_stack.redo.push(group);
+        }
+    }
+
+    /// Redo the last undone edit group.
+    pub fn redo(&mut self) {
+        if let Some(group) = self.undo_stack.redo.pop() {
+            for edit in group.edits.iter() {
+                match edit {
+                    EditKind::Insert { pos, text } => {
+                        self.rope.insert(*pos, text);
+                    }
+                    EditKind::Delete { pos, text } => {
+                        self.rope.remove(*pos..*pos + text.len());
+                    }
+                }
+            }
+            // Place cursor at the end of the last edit
+            if let Some(last) = group.edits.last() {
+                match last {
+                    EditKind::Insert { pos, text } => self.cursor = *pos + text.len(),
+                    EditKind::Delete { pos, .. } => self.cursor = *pos,
+                }
+            }
+            self.modified = true;
+            self.undo_stack.undo.push(group);
+        }
+    }
+
+    //  Mutations that record to undo stack
+
     pub fn insert_char(&mut self, ch: char) {
         self.modified = true;
-        self.rope.insert_char(self.cursor, ch);
+        let pos = self.cursor;
+        self.rope.insert_char(pos, ch);
         self.cursor += 1;
+        self.undo_stack.record_insert(pos, ch);
     }
 
     pub fn insert_str(&mut self, s: &str) {
         self.modified = true;
-        self.rope.insert(self.cursor, s);
+        let pos = self.cursor;
+        self.rope.insert(pos, s);
         self.cursor += s.chars().count();
+        self.undo_stack.record_insert_str(pos, s);
     }
 
     pub fn delete_line(&mut self) {
+        let cursor_before = self.cursor;
         let (line, _) = self.cursor_position();
         let line_start = self.rope.line_to_char(line);
         let line_end = if line + 1 < self.rope.len_lines() {
@@ -82,23 +146,49 @@ impl Buffer {
         } else {
             self.rope.len_chars()
         };
+        if line_start == line_end {
+            return;
+        }
+        let deleted: String = self.rope.slice(line_start..line_end).into();
         self.rope.remove(line_start..line_end);
         self.modified = true;
         self.cursor = line_start.min(self.rope.len_chars());
+        self.undo_stack.push_edit(
+            EditKind::Delete {
+                pos: line_start,
+                text: deleted,
+            },
+            cursor_before,
+        );
     }
 
     pub fn delete_char_backward(&mut self) {
         if self.cursor > 0 {
             self.modified = true;
             self.cursor -= 1;
+            let ch: String = self.rope.slice(self.cursor..self.cursor + 1).into();
             self.rope.remove(self.cursor..self.cursor + 1);
+            self.undo_stack.record_delete(self.cursor, &ch);
         }
     }
 
     pub fn delete_char_forward(&mut self) {
         if self.cursor < self.rope.len_chars() {
             self.modified = true;
+            let ch: String = self.rope.slice(self.cursor..self.cursor + 1).into();
             self.rope.remove(self.cursor..self.cursor + 1);
+            // Normal mode `x` — push as immediate edit group
+            if self.undo_stack.pending.is_none() {
+                self.undo_stack.push_edit(
+                    EditKind::Delete {
+                        pos: self.cursor,
+                        text: ch,
+                    },
+                    self.cursor,
+                );
+            } else {
+                self.undo_stack.record_delete(self.cursor, &ch);
+            }
         }
     }
 
