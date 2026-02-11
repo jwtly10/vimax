@@ -3,6 +3,7 @@ use crate::undo::{EditKind, UndoStack};
 use std::path::Path;
 
 use ropey::Rope;
+use tracing::debug;
 
 pub struct Buffer {
     rope: Rope,
@@ -344,6 +345,7 @@ impl Buffer {
             self.rope.write_to(writer)?;
             std::fs::rename(temp_path, path)?;
             self.modified = false;
+            debug!("Saved buffer '{}' to '{}'", self.name, path);
         } else {
             anyhow::bail!("Cannot save buffer without a file path");
         }

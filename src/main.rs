@@ -6,7 +6,7 @@ use buffer::Buffer;
 use iced::keyboard;
 use iced::widget::Space;
 use iced::widget::{column, container, row, text};
-use iced::{Element, Length, Subscription, Task, Theme, event};
+use iced::{Element, Length, Subscription, Task, Theme, event, window};
 use tracing::{debug, error, info};
 
 fn main() -> iced::Result {
@@ -23,6 +23,7 @@ fn main() -> iced::Result {
     iced::application(Remax::boot, Remax::update, Remax::view)
         .subscription(Remax::subscription)
         .theme(Remax::theme)
+        .exit_on_close_request(false)
         .run()
 }
 
@@ -36,13 +37,16 @@ struct Remax {
     scroll_x: usize,
     visible_lines: usize,
     visible_cols: usize,
-    pending_normal_key: Option<char>, // Quick multi-key commands
+    pending_normal_key: Option<char>,
+    command_line: String,
+    command_display: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VimMode {
     Normal,
     Insert,
+    Command,
 }
 
 impl std::fmt::Display for VimMode {
@@ -50,6 +54,7 @@ impl std::fmt::Display for VimMode {
         match self {
             VimMode::Normal => write!(f, "NORMAL"),
             VimMode::Insert => write!(f, "INSERT"),
+            VimMode::Command => write!(f, "COMMAND"),
         }
     }
 }
@@ -64,6 +69,7 @@ enum Message {
         modifiers: keyboard::Modifiers,
         text: Option<smol_str::SmolStr>,
     },
+    WindowCloseRequested(window::Id),
     ScrollLines(f32),
     ScrollCols(f32),
     MouseClick {
@@ -113,31 +119,43 @@ impl Remax {
                 visible_lines: 40,
                 visible_cols: 80,
                 pending_normal_key: None,
+                command_line: String::new(),
+                command_display: String::new(),
             },
             Task::none(),
         )
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        event::listen_with(|event, _status, _id| match event {
-            iced::Event::Keyboard(keyboard::Event::KeyPressed {
-                key,
-                modified_key,
-                modifiers,
-                text,
-                ..
-            }) => Some(Message::KeyEvent {
-                key,
-                modified_key,
-                modifiers,
-                text,
+        Subscription::batch([
+            event::listen_with(|event, _status, _id| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key,
+                    modified_key,
+                    modifiers,
+                    text,
+                    ..
+                }) => Some(Message::KeyEvent {
+                    key,
+                    modified_key,
+                    modifiers,
+                    text,
+                }),
+                _ => None,
             }),
-            _ => None,
-        })
+            window::close_requests().map(Message::WindowCloseRequested),
+        ])
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::WindowCloseRequested(id) => {
+                if self.buffer.is_modified() {
+                    self.command_display = String::from("Unsaved changes! Use :q! to force quit");
+                    return Task::none();
+                }
+                return window::close(id);
+            }
             Message::KeyEvent {
                 key,
                 modified_key,
@@ -153,7 +171,6 @@ impl Remax {
                     "key event"
                 );
 
-                // Global shorts overwrite anything handled by the vim layer
                 if self.handle_global_key(&modified_key, &modifiers) {
                     self.ensure_cursor_visible();
                     return Task::none();
@@ -162,6 +179,9 @@ impl Remax {
                 match self.vim_mode {
                     VimMode::Normal => self.handle_normal_key(&modified_key, &modifiers),
                     VimMode::Insert => self.handle_insert_key(&key, &modifiers, text.as_deref()),
+                    VimMode::Command => {
+                        return self.handle_command_key(&key, text.as_deref());
+                    }
                 }
                 self.ensure_cursor_visible();
             }
@@ -246,13 +266,10 @@ impl Remax {
             match key {
                 keyboard::Key::Character(c) => match c.as_str() {
                     "s" => {
-                        debug!("save shortcut triggered");
                         // TODO: Need some error propogation
                         let res = self.buffer.save();
                         if let Err(e) = res {
                             error!(?e, "failed to save file");
-                        } else {
-                            info!("file saved successfully");
                         }
                         return true;
                     }
@@ -329,6 +346,11 @@ impl Remax {
                 "^" => self.buffer.move_to_first_non_whitespace(),
                 "G" => self.buffer.move_to_end(),
                 "x" => self.buffer.delete_char_forward(),
+                ":" => {
+                    self.command_line.clear();
+                    self.command_display.clear();
+                    self.vim_mode = VimMode::Command;
+                }
                 other => {
                     debug!(key = other, "unhandled normal mode key");
                 }
@@ -414,6 +436,83 @@ impl Remax {
         }
     }
 
+    fn handle_command_key(&mut self, key: &keyboard::Key, text: Option<&str>) -> Task<Message> {
+        if let keyboard::Key::Named(named) = key {
+            match named {
+                keyboard::key::Named::Escape => {
+                    self.command_line.clear();
+                    self.vim_mode = VimMode::Normal;
+                    return Task::none();
+                }
+                keyboard::key::Named::Enter => {
+                    let cmd = self.command_line.clone();
+                    self.command_line.clear();
+                    self.vim_mode = VimMode::Normal;
+                    return self.execute_command(&cmd);
+                }
+                keyboard::key::Named::Backspace => {
+                    if self.command_line.is_empty() {
+                        self.vim_mode = VimMode::Normal;
+                    } else {
+                        self.command_line.pop();
+                    }
+                    return Task::none();
+                }
+                keyboard::key::Named::Space => {}
+                _ => return Task::none(),
+            }
+        }
+        if let Some(t) = text {
+            for ch in t.chars() {
+                if !ch.is_control() {
+                    self.command_line.push(ch);
+                }
+            }
+        }
+        Task::none()
+    }
+
+    fn execute_command(&mut self, cmd: &str) -> Task<Message> {
+        match cmd.trim() {
+            "w" => {
+                match self.buffer.save() {
+                    Ok(()) => {
+                        info!("file saved");
+                        self.command_display = String::from("Written");
+                    }
+                    Err(e) => {
+                        error!(?e, "failed to save");
+                        self.command_display = format!("Error: {}", e);
+                    }
+                }
+                Task::none()
+            }
+            "q" => {
+                if self.buffer.is_modified() {
+                    self.command_display = String::from(
+                        "Unsaved changes! Use :q! to force quit, or :wq to save and quit",
+                    );
+                    Task::none()
+                } else {
+                    iced::exit()
+                }
+            }
+            "q!" => iced::exit(),
+            "wq" => match self.buffer.save() {
+                Ok(()) => iced::exit(),
+                Err(e) => {
+                    error!(?e, "failed to save");
+                    self.command_display = format!("Error: {}", e);
+                    Task::none()
+                }
+            },
+            other => {
+                self.command_display = format!("Unknown command: {}", other);
+                Task::none()
+            }
+        }
+    }
+
     fn view(&self) -> Element<'_, Message> {
         let (cursor_line, cursor_col) = self.buffer.cursor_position();
 
@@ -423,6 +522,7 @@ impl Remax {
             .color(match self.vim_mode {
                 VimMode::Normal => iced::Color::from_rgb(0.6, 0.8, 1.0),
                 VimMode::Insert => iced::Color::from_rgb(0.6, 1.0, 0.6),
+                VimMode::Command => iced::Color::from_rgb(1.0, 0.8, 0.5),
             });
 
         let modified_indicator = if self.buffer.is_modified() { "[+]" } else { "" };
@@ -453,7 +553,21 @@ impl Remax {
         .width(Length::Fill)
         .padding([2, 0]);
 
-        let content = column![grid, modeline];
+        let cmdline_text = if self.vim_mode == VimMode::Command {
+            format!(":{}", self.command_line)
+        } else {
+            self.command_display.clone()
+        };
+
+        let cmdline = container(
+            text(format!(" {}", cmdline_text))
+                .size(14)
+                .color(iced::Color::from_rgb(0.8, 0.8, 0.8)),
+        )
+        .width(Length::Fill)
+        .padding([2, 0]);
+
+        let content = column![grid, modeline, cmdline];
 
         container(content)
             .width(Length::Fill)
