@@ -25,9 +25,16 @@ fn main() -> iced::Result {
         .run()
 }
 
+const SCROLL_MARGIN: usize = 5;
+const SCROLL_SPEED: f32 = 3.0;
+
 struct Remax {
     buffer: Buffer,
     vim_mode: VimMode,
+    scroll_y: usize,
+    scroll_x: usize,
+    visible_lines: usize,
+    visible_cols: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +62,16 @@ enum Message {
         modifiers: keyboard::Modifiers,
         text: Option<smol_str::SmolStr>,
     },
+    ScrollLines(f32),
+    ScrollCols(f32),
+    MouseClick {
+        x: f32,
+        y: f32,
+    },
+    ViewportResized {
+        lines: usize,
+        cols: usize,
+    },
 }
 
 impl Remax {
@@ -65,13 +82,17 @@ impl Remax {
     fn boot() -> (Self, Task<Message>) {
         let mut buffer = Buffer::new();
         buffer.set_name("*scratch*");
-        buffer.insert_str("Welcome to remax.\n\nPress 'i' to enter insert mode.\nPress 'Esc' to return to normal mode.\nUse h/j/k/l to navigate.\n");
+        buffer.insert_str("Welcome to remax.\n\nPress 'i' to enter insert mode.\nPress 'Esc' to return to normal mode.\nUse h/j/k/l to navigate.");
         buffer.move_to_start();
         info!("editor booted");
         (
             Self {
                 buffer,
                 vim_mode: VimMode::Normal,
+                scroll_y: 0,
+                scroll_x: 0,
+                visible_lines: 40,
+                visible_cols: 80,
             },
             Task::none(),
         )
@@ -115,9 +136,73 @@ impl Remax {
                     VimMode::Normal => self.handle_normal_key(&modified_key, &modifiers),
                     VimMode::Insert => self.handle_insert_key(&key, &modifiers, text.as_deref()),
                 }
+                self.ensure_cursor_visible();
+            }
+            Message::ScrollLines(delta) => {
+                let total = self.buffer.total_lines();
+                let new_y = (self.scroll_y as f32 - delta * SCROLL_SPEED).round();
+                let max_scroll = total.saturating_sub(1);
+                self.scroll_y = (new_y.max(0.0) as usize).min(max_scroll);
+                debug!(delta, scroll_y = self.scroll_y, "scrolled lines");
+            }
+            Message::ScrollCols(delta) => {
+                let total = self.buffer.max_line_len();
+                let new_x = (self.scroll_x as f32 - delta * SCROLL_SPEED).round();
+                let max_scroll = total.saturating_sub(1);
+                self.scroll_x = (new_x.max(0.0) as usize).min(max_scroll);
+                debug!(delta, scroll_x = self.scroll_x, "scrolled cols");
+            }
+            Message::MouseClick { x, y } => {
+                let line = self.scroll_y + (y / text_grid::LINE_HEIGHT) as usize;
+                let col = self.scroll_x
+                    + ((x - text_grid::GUTTER_WIDTH - 8.0).max(0.0) / text_grid::CHAR_WIDTH)
+                        as usize;
+                self.buffer.set_cursor_position(line, col);
+                self.ensure_cursor_visible();
+            }
+            Message::ViewportResized { lines, cols } => {
+                if self.visible_lines != lines || self.visible_cols != cols {
+                    self.visible_lines = lines;
+                    self.visible_cols = cols;
+                    self.ensure_cursor_visible();
+                }
             }
         }
         Task::none()
+    }
+
+    fn ensure_cursor_visible(&mut self) {
+        let (cursor_line, cursor_col) = self.buffer.cursor_position();
+
+        // Vertical scrolling with margin
+        if self.visible_lines > SCROLL_MARGIN * 2 {
+            if cursor_line < self.scroll_y + SCROLL_MARGIN {
+                self.scroll_y = cursor_line.saturating_sub(SCROLL_MARGIN);
+            } else if cursor_line + SCROLL_MARGIN >= self.scroll_y + self.visible_lines {
+                self.scroll_y =
+                    (cursor_line + SCROLL_MARGIN + 1).saturating_sub(self.visible_lines);
+            }
+        } else {
+            // Window too small for margin, just keep cursor in view
+            if cursor_line < self.scroll_y {
+                self.scroll_y = cursor_line;
+            } else if cursor_line >= self.scroll_y + self.visible_lines {
+                self.scroll_y = cursor_line + 1 - self.visible_lines;
+            }
+        }
+
+        // Clamp scroll_y to valid range
+        let total = self.buffer.total_lines();
+        let max_scroll = total.saturating_sub(1);
+        self.scroll_y = self.scroll_y.min(max_scroll);
+
+        // Horizontal scrolling
+        let h_margin = 10_usize;
+        if cursor_col < self.scroll_x {
+            self.scroll_x = cursor_col.saturating_sub(h_margin);
+        } else if cursor_col >= self.scroll_x + self.visible_cols {
+            self.scroll_x = cursor_col + 1 + h_margin - self.visible_cols;
+        }
     }
 
     /// Normal mode: we match on `modified_key` which already has shift applied.
@@ -247,7 +332,7 @@ impl Remax {
     fn view(&self) -> Element<'_, Message> {
         let (cursor_line, cursor_col) = self.buffer.cursor_position();
 
-        let grid = text_grid::text_grid(&self.buffer);
+        let grid = text_grid::text_grid(&self.buffer, self.scroll_y, self.scroll_x);
 
         let mode_label = text(format!(" {} ", self.vim_mode))
             .size(14)

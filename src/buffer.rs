@@ -161,6 +161,26 @@ impl Buffer {
         }
     }
 
+    pub fn total_lines(&self) -> usize {
+        self.rope.len_lines()
+    }
+
+    // TODO: Perf nightmare
+    pub fn max_line_len(&self) -> usize {
+        (0..self.rope.len_lines())
+            .map(|line| self.line_len_no_newline(line))
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn set_cursor_position(&mut self, line: usize, col: usize) {
+        let total = self.rope.len_lines();
+        let line = line.min(if total > 0 { total - 1 } else { 0 });
+        let line_len = self.line_len_no_newline(line);
+        let col = col.min(line_len);
+        self.cursor = self.rope.line_to_char(line) + col;
+    }
+
     fn char_at(&self, idx: usize) -> char {
         self.rope.char(idx)
     }
