@@ -89,25 +89,21 @@ impl Remax {
 
     fn boot() -> (Self, Task<Message>) {
         let args = parse_args();
-        let file_path = args.get(0); // TODO: Assuming the first is always file path
-
-        let buffer: Buffer;
-
-        if file_path.is_some() {
-            let path = std::path::Path::new(file_path.unwrap());
+        let buffer = if let Some(file_path) = args.first() {
+            let path = std::path::Path::new(file_path);
             let buf_name = path.file_name().unwrap_or_default().to_string_lossy();
             debug!(?path, "attempting to read file into buffer");
             match std::fs::read_to_string(path) {
-                Ok(content) => buffer = Buffer::from_str(&content, &buf_name, &path, false),
+                Ok(content) => Buffer::from_str(&content, &buf_name, path, false),
                 Err(e) => {
                     debug!(?e, "failed to read file, starting with empty buffer");
-                    buffer = create_scratch_buffer();
+                    create_scratch_buffer()
                 }
             }
         } else {
             debug!("no file path provided, starting with empty buffer");
-            buffer = create_scratch_buffer();
-        }
+            create_scratch_buffer()
+        };
 
         info!("editor booted");
         (
@@ -252,29 +248,23 @@ impl Remax {
 
     /// Handles global shortcuts that work in any mode
     fn handle_global_key(&mut self, key: &keyboard::Key, modifiers: &keyboard::Modifiers) -> bool {
-        if modifiers.control() {
-            if let keyboard::Key::Character(c) = key {
-                if c.as_str() == "r" {
-                    self.buffer.redo();
-                    return true;
-                }
-            }
+        if modifiers.control()
+            && let keyboard::Key::Character(c) = key
+            && c.as_str() == "r"
+        {
+            self.buffer.redo();
+            return true;
         }
-        if modifiers.command() {
-            match key {
-                keyboard::Key::Character(c) => match c.as_str() {
-                    "s" => {
-                        // TODO: Need some error propogation
-                        let res = self.buffer.save();
-                        if let Err(e) = res {
-                            error!(?e, "failed to save file");
-                        }
-                        return true;
-                    }
-                    _ => {}
-                },
-                _ => {}
+        if modifiers.command()
+            && let keyboard::Key::Character(c) = key
+            && c.as_str() == "s"
+        {
+            // TODO: Need some error propogation
+            let res = self.buffer.save();
+            if let Err(e) = res {
+                error!(?e, "failed to save file");
             }
+            return true;
         }
         false
     }

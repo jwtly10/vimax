@@ -33,11 +33,11 @@ impl UndoStack {
 
     /// Finish the current group and push it onto the undo stack.
     pub fn finish_group(&mut self) {
-        if let Some(group) = self.pending.take() {
-            if !group.edits.is_empty() {
-                self.undo.push(group);
-                self.redo.clear();
-            }
+        if let Some(group) = self.pending.take()
+            && !group.edits.is_empty()
+        {
+            self.undo.push(group);
+            self.redo.clear();
         }
     }
 
@@ -53,11 +53,11 @@ impl UndoStack {
     /// Record an insert into the pending group, coalescing consecutive chars.
     pub fn record_insert(&mut self, pos: usize, ch: char) {
         if let Some(group) = &mut self.pending {
-            if let Some(EditKind::Insert { pos: last_pos, text }) = group.edits.last_mut() {
-                if *last_pos + text.len() == pos {
-                    text.push(ch);
-                    return;
-                }
+            if let Some(EditKind::Insert { pos: last_pos, text }) = group.edits.last_mut()
+                && *last_pos + text.len() == pos
+            {
+                text.push(ch);
+                return;
             }
             group.edits.push(EditKind::Insert {
                 pos,
