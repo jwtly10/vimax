@@ -292,6 +292,9 @@ impl Remax {
                     self.buffer.move_right();
                     self.vim_mode = VimMode::Insert;
                 }
+                "e" => {
+                    self.buffer.move_to_line_end();
+                }
                 "o" => {
                     self.buffer.start_edit_group();
                     self.buffer.move_to_line_end();
