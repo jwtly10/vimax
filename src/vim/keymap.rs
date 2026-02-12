@@ -177,6 +177,10 @@ pub fn build_global_keymap() -> Keymap {
     km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('j')], "window.focus_down");
     km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('k')], "window.focus_up");
     km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('l')], "window.focus_right");
+    km.bind(vec![KeyPress::char('c').cmd()], "system.copy");
+    km.bind(vec![KeyPress::char('x').cmd()], "system.cut");
+    km.bind(vec![KeyPress::char('v').cmd()], "system.paste");
+    km.bind(vec![KeyPress::char('w').cmd()], "window.close");
     km
 }
 

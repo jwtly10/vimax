@@ -269,17 +269,27 @@ impl Editor {
                 }
             }
             EditorAction::Quit { force } => {
-                if !force && self.buffer().is_modified() {
-                    self.status_message = String::from(
-                        "Unsaved changes! Use :q! to force quit, or :wq to save and quit",
-                    );
-                    return EditorEffect::None;
+                if force {
+                    return EditorEffect::Task(iced::exit());
                 }
+                self.status_message = String::from(
+                    "Use :qa! to force quit all, or :wq to save and close",
+                );
+            }
+            EditorAction::ForceQuitApp => {
                 return EditorEffect::Task(iced::exit());
             }
             EditorAction::WriteQuit => {
                 match self.buffer_mut().save() {
-                    Ok(()) => return EditorEffect::Task(iced::exit()),
+                    Ok(()) => {
+                        info!("file saved");
+                        let ws = &mut self.workspaces[self.active_workspace];
+                        if ws.layout.leaf_count() > 1 {
+                            ws.close_window();
+                        } else {
+                            return EditorEffect::Task(iced::exit());
+                        }
+                    }
                     Err(e) => {
                         error!(?e, "failed to save");
                         self.status_message = format!("Error: {}", e);
@@ -306,8 +316,14 @@ impl Editor {
             }
             EditorAction::CloseWindow => {
                 let ws = &mut self.workspaces[self.active_workspace];
-                if !ws.close_window() {
-                    self.status_message = String::from("Cannot close last window");
+                if ws.layout.leaf_count() > 1 {
+                    ws.close_window();
+                } else if self.has_unsaved_changes() {
+                    self.status_message = String::from(
+                        "Unsaved changes! Use :q! to force quit, or :wq to save and close",
+                    );
+                } else {
+                    return EditorEffect::Task(iced::exit());
                 }
             }
             EditorAction::FocusLeft => {
@@ -356,8 +372,69 @@ impl Editor {
                 };
                 self.window_mut().selection = Some(selection);
             }
+            EditorAction::SystemCopy => {
+                self.system_copy(false);
+            }
+            EditorAction::SystemCut => {
+                self.system_copy(true);
+            }
+            EditorAction::SystemPaste => {
+                self.system_paste();
+            }
         }
         EditorEffect::None
+    }
+
+    fn system_copy(&mut self, cut: bool) {
+        let win = self.workspace().window();
+        let buf_id = win.buffer_id;
+        let text = if let Some((start, end)) = win.selection {
+            let yanked = self.buffers[buf_id].yank_range(start, end);
+            if cut {
+                let cursor = win.cursor;
+                let (new_cursor, _) = self.buffers[buf_id].delete_range(cursor, start, end);
+                self.workspace_mut().window_mut().cursor = new_cursor;
+                self.workspace_mut().window_mut().selection = None;
+            }
+            yanked
+        } else {
+            let cursor = win.cursor;
+            let line = self.buffers[buf_id].char_to_line(cursor);
+            let line_start = self.buffers[buf_id].line_to_char(line);
+            let line_end = if line + 1 < self.buffers[buf_id].total_lines() {
+                self.buffers[buf_id].line_to_char(line + 1)
+            } else {
+                self.buffers[buf_id].len_chars()
+            };
+            let yanked = self.buffers[buf_id].yank_range(line_start, line_end);
+            if cut {
+                let (new_cursor, _) = self.buffers[buf_id].delete_range(cursor, line_start, line_end);
+                self.workspace_mut().window_mut().cursor = new_cursor;
+            }
+            yanked
+        };
+        self.registers.unnamed = text.clone();
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            let _ = clipboard.set_text(text);
+        }
+    }
+
+    fn system_paste(&mut self) {
+        let text = if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            clipboard.get_text().unwrap_or_default()
+        } else {
+            return;
+        };
+        if text.is_empty() {
+            return;
+        }
+        let cursor = self.cursor();
+        let new_cursor = self.buffer_mut().insert_str(cursor, &text);
+        self.window_mut().cursor = new_cursor;
+    }
+
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.buffers.iter().any(|b| b.is_modified())
     }
 
     fn move_cursor(&mut self, motion: &Motion, count: usize) {

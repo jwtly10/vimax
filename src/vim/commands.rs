@@ -176,6 +176,10 @@ pub fn resolve(
         "window.focus_up" => vec![EditorAction::FocusUp],
         "window.focus_down" => vec![EditorAction::FocusDown],
 
+        "system.copy" => vec![EditorAction::SystemCopy],
+        "system.cut" => vec![EditorAction::SystemCut],
+        "system.paste" => vec![EditorAction::SystemPaste],
+
         _ => vec![],
     }
 }

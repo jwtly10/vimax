@@ -958,8 +958,9 @@ impl InputState {
         let trimmed = cmd.trim();
         match trimmed {
             "w" => vec![EditorAction::Save],
-            "q" => vec![EditorAction::Quit { force: false }],
+            "q" => vec![EditorAction::CloseWindow],
             "q!" => vec![EditorAction::Quit { force: true }],
+            "qa!" => vec![EditorAction::ForceQuitApp],
             "wq" => vec![EditorAction::WriteQuit],
             "bn" | "bnext" => vec![EditorAction::NextBuffer],
             "bp" | "bprev" | "bprevious" => vec![EditorAction::PrevBuffer],

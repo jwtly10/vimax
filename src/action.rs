@@ -73,6 +73,10 @@ pub enum EditorAction {
     FocusRight,
     FocusUp,
     FocusDown,
+    SystemCopy,
+    SystemCut,
+    SystemPaste,
+    ForceQuitApp,
 }
 
 pub enum EditorEffect {

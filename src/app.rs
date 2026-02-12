@@ -105,13 +105,15 @@ impl Remax {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::WindowCloseRequested(id) => {
-                if self.editor.buffer().is_modified() {
+            Message::WindowCloseRequested(_id) => {
+                if self.editor.has_unsaved_changes() {
                     self.editor.status_message =
-                        String::from("Unsaved changes! Use :q! to force quit");
-                    return Task::none();
+                        String::from("Unsaved changes! Use :qa! to force quit, or :wq to save");
+                } else {
+                    self.editor.status_message =
+                        String::from("Use :qa! to quit, or :q to close current window");
                 }
-                return window::close(id);
+                return Task::none();
             }
             Message::KeyEvent {
                 key,
