@@ -55,7 +55,6 @@ impl UndoStack {
         self.redo.clear();
     }
 
-    /// Coalesces consecutive char inserts at adjacent positions into one edit.
     pub fn record_insert(&mut self, pos: usize, ch: char) {
         if let Some(group) = &mut self.pending {
             if let Some(EditKind::Insert { pos: last_pos, text }) = group.edits.last_mut()

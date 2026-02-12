@@ -62,6 +62,10 @@ pub enum EditorAction {
     SetStatusMessage(String),
     SetSelection(Option<(usize, usize)>),
     UpdateVisualSelection { anchor: usize, mode: VimMode },
+    OpenFile(std::path::PathBuf),
+    NextBuffer,
+    PrevBuffer,
+    CloseBuffer,
 }
 
 pub enum EditorEffect {

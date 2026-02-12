@@ -16,6 +16,7 @@ pub const GUTTER_WIDTH: f32 = GUTTER_CHARS as f32 * CHAR_WIDTH + 8.0;
 
 pub struct TextGrid<'a> {
     buffer: &'a Buffer,
+    cursor: usize,
     scroll_y: usize,
     scroll_x: usize,
     selection: Option<(usize, usize)>,
@@ -25,6 +26,7 @@ pub struct TextGrid<'a> {
 
 pub fn text_grid<'a>(
     buffer: &'a Buffer,
+    cursor: usize,
     scroll_y: usize,
     scroll_x: usize,
     selection: Option<(usize, usize)>,
@@ -33,6 +35,7 @@ pub fn text_grid<'a>(
 ) -> Element<'a, crate::app::Message> {
     Element::new(TextGrid {
         buffer,
+        cursor,
         scroll_y,
         scroll_x,
         selection,
@@ -119,7 +122,7 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
     ) {
         let bounds = layout.bounds();
         let rope = self.buffer.rope();
-        let (cursor_line, cursor_col) = self.buffer.cursor_position();
+        let (cursor_line, cursor_col) = self.buffer.cursor_position(self.cursor);
 
         let visible_lines = (bounds.height / LINE_HEIGHT) as usize;
         let total_lines = rope.len_lines();

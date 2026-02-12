@@ -7,6 +7,7 @@ mod text_grid;
 mod undo;
 mod vim;
 mod viewport;
+mod window;
 
 use app::Remax;
 use tracing::info;

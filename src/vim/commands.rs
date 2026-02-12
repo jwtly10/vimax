@@ -9,7 +9,6 @@ pub fn resolve(
     buf: &dyn BufferQuery,
 ) -> Vec<EditorAction> {
     match id {
-        // Cursor motions
         "cursor.move_left" => vec![EditorAction::MoveCursor {
             motion: Motion::Left,
             count,
@@ -59,7 +58,6 @@ pub fn resolve(
             count: 1,
         }],
 
-        // Scroll
         "scroll.half_down" => vec![EditorAction::MoveCursor {
             motion: Motion::HalfPageDown,
             count,
@@ -69,7 +67,6 @@ pub fn resolve(
             count,
         }],
 
-        // Editing
         "edit.delete_char_forward" => vec![EditorAction::DeleteCharForward { count }],
         "edit.delete_line" => vec![EditorAction::DeleteLine { count }],
         "edit.undo" => vec![EditorAction::Undo],
@@ -81,13 +78,11 @@ pub fn resolve(
             vec![]
         }
 
-        // Insert mode transitions
         "insert.backspace" => vec![EditorAction::DeleteCharBackward],
         "insert.delete" => vec![EditorAction::DeleteCharForward { count: 1 }],
         "insert.newline" => vec![EditorAction::InsertNewline],
         "insert.tab" => vec![EditorAction::InsertTab],
 
-        // Vim mode transitions
         "vim.enter_insert" => input.enter_insert(),
         "vim.enter_insert_after" => input.enter_insert_after(),
         "vim.enter_insert_line_end" => input.enter_insert_line_end(),
@@ -114,22 +109,15 @@ pub fn resolve(
             vec![]
         }
 
-        // Search
         "search.next" => vec![EditorAction::SearchNext { count }],
         "search.prev" => vec![EditorAction::SearchPrev { count }],
 
-        // Operators (set pending, no actions yet)
-        "op.delete" | "op.change" | "op.yank" => {
-            // Handled in input.rs handle_normal — shouldn't reach here
-            vec![]
-        }
+        "op.delete" | "op.change" | "op.yank" => vec![],
 
-        // Visual operations
         "visual.delete" => input.visual_delete(buf),
         "visual.yank" => input.visual_yank(buf),
         "visual.change" => input.visual_change(buf),
 
-        // Find char motions
         "motion.find_char_forward" => {
             input.pending_find_char = Some((true, false));
             vec![]
@@ -175,7 +163,6 @@ pub fn resolve(
             }
         }
 
-        // Buffer operations
         "buffer.save" => vec![EditorAction::Save],
         "buffer.quit" => vec![EditorAction::Quit { force: false }],
         "buffer.force_quit" => vec![EditorAction::Quit { force: true }],

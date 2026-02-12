@@ -324,6 +324,7 @@ impl InputState {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn handle_key(
         &mut self,
         key: &keyboard::Key,
@@ -619,7 +620,7 @@ impl InputState {
         let (start, end) = if before <= after {
             (before, if inclusive { after + 1 } else { after })
         } else {
-            (if inclusive { after } else { after }, before + 1)
+            (after, before + 1)
         };
 
         if start >= end {
@@ -920,11 +921,29 @@ impl InputState {
     }
 
     fn resolve_ex_command(cmd: &str) -> Vec<EditorAction> {
-        match cmd.trim() {
+        let trimmed = cmd.trim();
+        match trimmed {
             "w" => vec![EditorAction::Save],
             "q" => vec![EditorAction::Quit { force: false }],
             "q!" => vec![EditorAction::Quit { force: true }],
             "wq" => vec![EditorAction::WriteQuit],
+            "bn" | "bnext" => vec![EditorAction::NextBuffer],
+            "bp" | "bprev" | "bprevious" => vec![EditorAction::PrevBuffer],
+            "bd" | "bdelete" => vec![EditorAction::CloseBuffer],
+            _ if trimmed.starts_with("e ") || trimmed.starts_with("edit ") => {
+                let path = trimmed
+                    .strip_prefix("e ")
+                    .or_else(|| trimmed.strip_prefix("edit "))
+                    .unwrap()
+                    .trim();
+                if path.is_empty() {
+                    vec![EditorAction::SetStatusMessage(
+                        "Usage: :e <path>".to_string(),
+                    )]
+                } else {
+                    vec![EditorAction::OpenFile(std::path::PathBuf::from(path))]
+                }
+            }
             other => vec![EditorAction::SetStatusMessage(format!(
                 "Unknown command: {}",
                 other

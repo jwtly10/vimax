@@ -1,75 +1,168 @@
+use std::path::Path;
+
 use tracing::{error, info};
 
-use crate::action::{BufferQuery, EditorAction, EditorEffect, Motion, Range};
+use crate::action::{EditorAction, EditorEffect, Motion, Range};
 use crate::buffer::Buffer;
 use crate::registers::Registers;
 use crate::vim::mode::VimMode;
-use crate::viewport::Viewport;
+use crate::window::Window;
 
 pub struct Editor {
     pub buffers: Vec<Buffer>,
-    pub active_buffer: usize,
-    pub viewport: Viewport,
+    pub windows: Vec<Window>,
+    pub active_window: usize,
     pub registers: Registers,
+    pub search_pattern: String,
     pub mode_display: String,
     pub status_message: String,
-    pub selection: Option<(usize, usize)>,
-    pub search_pattern: String,
-    search_matches: Vec<usize>,
-    search_version: u64,
-    search_cached_pattern: String,
 }
 
 impl Editor {
     pub fn new(buffer: Buffer) -> Self {
+        let window = Window::new(0);
         Self {
             buffers: vec![buffer],
-            active_buffer: 0,
-            viewport: Viewport::new(),
+            windows: vec![window],
+            active_window: 0,
             registers: Registers::new(),
+            search_pattern: String::new(),
             mode_display: String::from("NORMAL"),
             status_message: String::new(),
-            selection: None,
-            search_pattern: String::new(),
-            search_matches: Vec::new(),
-            search_version: u64::MAX,
-            search_cached_pattern: String::new(),
         }
+    }
+
+    pub fn window(&self) -> &Window {
+        &self.windows[self.active_window]
+    }
+
+    pub fn window_mut(&mut self) -> &mut Window {
+        &mut self.windows[self.active_window]
     }
 
     pub fn buffer(&self) -> &Buffer {
-        &self.buffers[self.active_buffer]
+        let buf_id = self.windows[self.active_window].buffer_id;
+        &self.buffers[buf_id]
     }
 
     pub fn buffer_mut(&mut self) -> &mut Buffer {
-        &mut self.buffers[self.active_buffer]
+        let buf_id = self.windows[self.active_window].buffer_id;
+        &mut self.buffers[buf_id]
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.windows[self.active_window].cursor
     }
 
     pub fn ensure_cursor_visible(&mut self) {
-        let (cursor_line, cursor_col) = self.buffer().cursor_position();
-        let total = self.buffer().total_lines();
-        self.viewport
-            .ensure_cursor_visible(cursor_line, cursor_col, total);
+        let buf_id = self.windows[self.active_window].buffer_id;
+        let buffer = &self.buffers[buf_id];
+        self.windows[self.active_window].ensure_cursor_visible(buffer);
     }
 
     pub fn update_search_cache(&mut self) {
-        let version = self.buffer().version();
-        if self.search_pattern == self.search_cached_pattern
-            && version == self.search_version
-        {
-            return;
-        }
-        self.search_matches = self.buffer().find_all(&self.search_pattern);
-        self.search_cached_pattern = self.search_pattern.clone();
-        self.search_version = version;
+        let buf_id = self.windows[self.active_window].buffer_id;
+        let buffer = &self.buffers[buf_id];
+        let pattern = &self.search_pattern;
+        self.windows[self.active_window].update_search_cache(buffer, pattern);
     }
 
     pub fn search_matches(&self) -> &[usize] {
-        &self.search_matches
+        &self.windows[self.active_window].search_matches
     }
 
     pub fn search_len(&self) -> usize {
         self.search_pattern.len()
+    }
+
+    pub fn open_file(&mut self, path: &Path) {
+        let path_str = path.to_string_lossy().to_string();
+        if let Some(idx) = self.buffers.iter().position(|b| b.file_path() == Some(&path_str)) {
+            self.windows[self.active_window].buffer_id = idx;
+            self.windows[self.active_window].cursor = 0;
+            self.windows[self.active_window].selection = None;
+            self.status_message = format!("\"{}\"", path.display());
+            return;
+        }
+
+        let buf_name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        match std::fs::read_to_string(path) {
+            Ok(content) => {
+                let buffer = Buffer::from_str(&content, &buf_name, path, false);
+                let buf_id = self.buffers.len();
+                self.buffers.push(buffer);
+                self.windows[self.active_window].buffer_id = buf_id;
+                self.windows[self.active_window].cursor = 0;
+                self.windows[self.active_window].selection = None;
+                self.windows[self.active_window].viewport = crate::viewport::Viewport::new();
+                self.status_message = format!("\"{}\"", path.display());
+            }
+            Err(e) => {
+                self.status_message = format!("Error opening file: {}", e);
+            }
+        }
+    }
+
+    pub fn next_buffer(&mut self) {
+        if self.buffers.len() <= 1 {
+            return;
+        }
+        let current = self.windows[self.active_window].buffer_id;
+        let next = (current + 1) % self.buffers.len();
+        self.windows[self.active_window].buffer_id = next;
+        self.windows[self.active_window].cursor =
+            self.windows[self.active_window].cursor.min(
+                self.buffers[next].len_chars().saturating_sub(1),
+            );
+        self.windows[self.active_window].selection = None;
+        self.status_message = format!("\"{}\"", self.buffers[next].name());
+    }
+
+    pub fn prev_buffer(&mut self) {
+        if self.buffers.len() <= 1 {
+            return;
+        }
+        let current = self.windows[self.active_window].buffer_id;
+        let prev = if current == 0 {
+            self.buffers.len() - 1
+        } else {
+            current - 1
+        };
+        self.windows[self.active_window].buffer_id = prev;
+        self.windows[self.active_window].cursor =
+            self.windows[self.active_window].cursor.min(
+                self.buffers[prev].len_chars().saturating_sub(1),
+            );
+        self.windows[self.active_window].selection = None;
+        self.status_message = format!("\"{}\"", self.buffers[prev].name());
+    }
+
+    pub fn close_buffer(&mut self) {
+        if self.buffers.len() <= 1 {
+            self.status_message = String::from("Cannot close last buffer");
+            return;
+        }
+        let buf_id = self.windows[self.active_window].buffer_id;
+        if self.buffers[buf_id].is_modified() {
+            self.status_message =
+                String::from("Unsaved changes! Use :bd! to force close");
+            return;
+        }
+        self.buffers.remove(buf_id);
+        for win in &mut self.windows {
+            if win.buffer_id == buf_id {
+                win.buffer_id = buf_id.min(self.buffers.len() - 1);
+                win.cursor = 0;
+                win.selection = None;
+            } else if win.buffer_id > buf_id {
+                win.buffer_id -= 1;
+            }
+        }
+        self.status_message = format!("\"{}\"", self.buffers[self.windows[self.active_window].buffer_id].name());
     }
 
     pub fn execute(&mut self, action: EditorAction) -> EditorEffect {
@@ -78,37 +171,53 @@ impl Editor {
                 self.move_cursor(&motion, count);
             }
             EditorAction::SetCursor(pos) => {
-                self.buffer_mut().set_cursor(pos);
+                self.window_mut().cursor = self.buffer().clamp_cursor(pos);
             }
             EditorAction::InsertChar(ch) => {
-                self.buffer_mut().insert_char(ch);
+                let cursor = self.cursor();
+                let new_cursor = self.buffer_mut().insert_char(cursor, ch);
+                self.window_mut().cursor = new_cursor;
             }
             EditorAction::InsertNewline => {
-                self.buffer_mut().insert_char('\n');
+                let cursor = self.cursor();
+                let new_cursor = self.buffer_mut().insert_char(cursor, '\n');
+                self.window_mut().cursor = new_cursor;
             }
             EditorAction::InsertTab => {
-                self.buffer_mut().insert_str("    ");
+                let cursor = self.cursor();
+                let new_cursor = self.buffer_mut().insert_str(cursor, "    ");
+                self.window_mut().cursor = new_cursor;
             }
             EditorAction::DeleteCharForward { count } => {
+                let mut cursor = self.cursor();
                 for _ in 0..count {
-                    self.buffer_mut().delete_char_forward();
+                    cursor = self.buffer_mut().delete_char_forward(cursor);
                 }
+                self.window_mut().cursor = cursor;
             }
             EditorAction::DeleteCharBackward => {
-                self.buffer_mut().delete_char_backward();
+                let cursor = self.cursor();
+                let new_cursor = self.buffer_mut().delete_char_backward(cursor);
+                self.window_mut().cursor = new_cursor;
             }
             EditorAction::DeleteLine { count } => {
+                let mut cursor = self.cursor();
                 for _ in 0..count {
-                    self.buffer_mut().delete_line();
+                    cursor = self.buffer_mut().delete_line(cursor);
                 }
+                self.window_mut().cursor = cursor;
             }
             EditorAction::DeleteRange(Range { start, end }) => {
-                let deleted = self.buffer_mut().delete_range(start, end);
+                let cursor = self.cursor();
+                let (new_cursor, deleted) = self.buffer_mut().delete_range(cursor, start, end);
+                self.window_mut().cursor = new_cursor;
                 self.registers.unnamed = deleted;
             }
             EditorAction::ChangeRange(Range { start, end }) => {
-                self.buffer_mut().start_edit_group();
-                let deleted = self.buffer_mut().delete_range(start, end);
+                let cursor = self.cursor();
+                self.buffer_mut().start_edit_group(cursor);
+                let (new_cursor, deleted) = self.buffer_mut().delete_range(cursor, start, end);
+                self.window_mut().cursor = new_cursor;
                 self.registers.unnamed = deleted;
             }
             EditorAction::YankRange(Range { start, end }) => {
@@ -116,24 +225,33 @@ impl Editor {
                 self.registers.unnamed = text;
             }
             EditorAction::ReplaceChar(ch) => {
-                self.buffer_mut().replace_char(ch);
+                let cursor = self.cursor();
+                let new_cursor = self.buffer_mut().replace_char(cursor, ch);
+                self.window_mut().cursor = new_cursor;
             }
             EditorAction::Paste { before } => {
                 let text = self.registers.unnamed.clone();
-                if before {
-                    self.buffer_mut().paste_before(&text);
+                let cursor = self.cursor();
+                let new_cursor = if before {
+                    self.buffer_mut().paste_before(cursor, &text)
                 } else {
-                    self.buffer_mut().paste_after(&text);
-                }
+                    self.buffer_mut().paste_after(cursor, &text)
+                };
+                self.window_mut().cursor = new_cursor;
             }
             EditorAction::Undo => {
-                self.buffer_mut().undo();
+                if let Some(new_cursor) = self.buffer_mut().undo() {
+                    self.window_mut().cursor = new_cursor;
+                }
             }
             EditorAction::Redo => {
-                self.buffer_mut().redo();
+                if let Some(new_cursor) = self.buffer_mut().redo() {
+                    self.window_mut().cursor = new_cursor;
+                }
             }
             EditorAction::StartEditGroup => {
-                self.buffer_mut().start_edit_group();
+                let cursor = self.cursor();
+                self.buffer_mut().start_edit_group(cursor);
             }
             EditorAction::FinishEditGroup => {
                 self.buffer_mut().finish_edit_group();
@@ -142,86 +260,16 @@ impl Editor {
                 self.search_pattern = pattern;
             }
             EditorAction::SearchNext { count } => {
-                if self.search_pattern.is_empty() {
-                    self.status_message = String::from("No search pattern");
-                    return EditorEffect::None;
-                }
-                self.update_search_cache();
-                if self.search_matches.is_empty() {
-                    self.status_message =
-                        format!("/{} [0/0]", self.search_pattern);
-                    return EditorEffect::None;
-                }
-                let cursor = self.buffer().cursor();
-                for _ in 0..count {
-                    let cur = self.buffer().cursor();
-                    let next = self
-                        .search_matches
-                        .iter()
-                        .find(|&&m| m > cur)
-                        .or(self.search_matches.first());
-                    if let Some(&pos) = next {
-                        self.buffer_mut().set_cursor(pos);
-                    }
-                }
-                let total = self.search_matches.len();
-                let current = self
-                    .search_matches
-                    .iter()
-                    .position(|&m| m == self.buffer().cursor())
-                    .map(|i| i + 1)
-                    .unwrap_or(0);
-                let wrapped = if self.buffer().cursor() <= cursor && count > 0 {
-                    " [wrapped]"
-                } else {
-                    ""
-                };
-                self.status_message =
-                    format!("/{} [{}/{}]{}", self.search_pattern, current, total, wrapped);
+                self.search_next(count);
             }
             EditorAction::SearchPrev { count } => {
-                if self.search_pattern.is_empty() {
-                    self.status_message = String::from("No search pattern");
-                    return EditorEffect::None;
-                }
-                self.update_search_cache();
-                if self.search_matches.is_empty() {
-                    self.status_message =
-                        format!("?{} [0/0]", self.search_pattern);
-                    return EditorEffect::None;
-                }
-                let cursor = self.buffer().cursor();
-                for _ in 0..count {
-                    let cur = self.buffer().cursor();
-                    let prev = self
-                        .search_matches
-                        .iter()
-                        .rev()
-                        .find(|&&m| m < cur)
-                        .or(self.search_matches.last());
-                    if let Some(&pos) = prev {
-                        self.buffer_mut().set_cursor(pos);
-                    }
-                }
-                let total = self.search_matches.len();
-                let current = self
-                    .search_matches
-                    .iter()
-                    .position(|&m| m == self.buffer().cursor())
-                    .map(|i| i + 1)
-                    .unwrap_or(0);
-                let wrapped = if self.buffer().cursor() >= cursor && count > 0 {
-                    " [wrapped]"
-                } else {
-                    ""
-                };
-                self.status_message =
-                    format!("?{} [{}/{}]{}", self.search_pattern, current, total, wrapped);
+                self.search_prev(count);
             }
             EditorAction::ClearSearch => {
                 self.search_pattern.clear();
-                self.search_matches.clear();
-                self.search_cached_pattern.clear();
+                let win = self.window_mut();
+                win.search_matches.clear();
+                win.search_cached_pattern.clear();
                 self.status_message.clear();
             }
             EditorAction::Save => {
@@ -254,6 +302,18 @@ impl Editor {
                     }
                 }
             }
+            EditorAction::OpenFile(path) => {
+                self.open_file(&path);
+            }
+            EditorAction::NextBuffer => {
+                self.next_buffer();
+            }
+            EditorAction::PrevBuffer => {
+                self.prev_buffer();
+            }
+            EditorAction::CloseBuffer => {
+                self.close_buffer();
+            }
             EditorAction::SetMode(mode) => {
                 self.mode_display = mode;
             }
@@ -261,108 +321,185 @@ impl Editor {
                 self.status_message = msg;
             }
             EditorAction::SetSelection(sel) => {
-                self.selection = sel;
+                self.window_mut().selection = sel;
             }
             EditorAction::UpdateVisualSelection { anchor, mode } => {
-                let cursor = self.buffer().cursor();
-                self.selection = Some(if mode == VimMode::VisualLine {
-                    let anchor_line = self.buffer().char_to_line(anchor);
-                    let cursor_line = self.buffer().char_to_line(cursor);
+                let cursor = self.cursor();
+                let buf = self.buffer();
+                let selection = if mode == VimMode::VisualLine {
+                    let anchor_line = buf.char_to_line(anchor);
+                    let cursor_line = buf.char_to_line(cursor);
                     let (start_line, end_line) = if anchor_line <= cursor_line {
                         (anchor_line, cursor_line)
                     } else {
                         (cursor_line, anchor_line)
                     };
-                    let start = self.buffer().line_to_char(start_line);
-                    let end = if end_line + 1 < self.buffer().total_lines() {
-                        self.buffer().line_to_char(end_line + 1)
+                    let start = buf.line_to_char(start_line);
+                    let end = if end_line + 1 < buf.total_lines() {
+                        buf.line_to_char(end_line + 1)
                     } else {
-                        self.buffer().len_chars()
+                        buf.len_chars()
                     };
                     (start, end)
                 } else if anchor <= cursor {
                     (anchor, cursor + 1)
                 } else {
                     (cursor, anchor + 1)
-                });
+                };
+                self.window_mut().selection = Some(selection);
             }
         }
         EditorEffect::None
     }
 
     fn move_cursor(&mut self, motion: &Motion, count: usize) {
-        match motion {
+        let buf_id = self.windows[self.active_window].buffer_id;
+        let cursor = self.windows[self.active_window].cursor;
+        let buffer = &self.buffers[buf_id];
+
+        let new_cursor = match motion {
             Motion::Left => {
-                for _ in 0..count {
-                    self.buffer_mut().move_left();
-                }
+                let mut c = cursor;
+                for _ in 0..count { c = buffer.move_left(c); }
+                c
             }
             Motion::Right => {
-                for _ in 0..count {
-                    self.buffer_mut().move_right();
-                }
+                let mut c = cursor;
+                for _ in 0..count { c = buffer.move_right(c); }
+                c
             }
             Motion::Up => {
-                for _ in 0..count {
-                    self.buffer_mut().move_up();
-                }
+                let mut c = cursor;
+                for _ in 0..count { c = buffer.move_up(c); }
+                c
             }
             Motion::Down => {
-                for _ in 0..count {
-                    self.buffer_mut().move_down();
-                }
+                let mut c = cursor;
+                for _ in 0..count { c = buffer.move_down(c); }
+                c
             }
             Motion::WordForward => {
-                for _ in 0..count {
-                    self.buffer_mut().move_word_forward();
-                }
+                let mut c = cursor;
+                for _ in 0..count { c = buffer.move_word_forward(c); }
+                c
             }
             Motion::WordBackward => {
-                for _ in 0..count {
-                    self.buffer_mut().move_word_backward();
-                }
+                let mut c = cursor;
+                for _ in 0..count { c = buffer.move_word_backward(c); }
+                c
             }
             Motion::WordEnd => {
+                let mut c = cursor;
+                for _ in 0..count { c = buffer.move_word_end(c); }
+                c
+            }
+            Motion::LineStart => buffer.move_to_line_start(cursor),
+            Motion::LineEnd => buffer.move_to_line_end(cursor),
+            Motion::FirstNonWhitespace => buffer.move_to_first_non_whitespace(cursor),
+            Motion::FileStart => buffer.move_to_start(),
+            Motion::FileEnd => buffer.move_to_end(),
+            Motion::FindChar { ch, forward, stop_before } => {
+                let mut c = cursor;
                 for _ in 0..count {
-                    self.buffer_mut().move_word_end();
+                    c = buffer.find_char_on_line(c, *ch, *forward, *stop_before);
                 }
-            }
-            Motion::LineStart => {
-                self.buffer_mut().move_to_line_start();
-            }
-            Motion::LineEnd => {
-                self.buffer_mut().move_to_line_end();
-            }
-            Motion::FirstNonWhitespace => {
-                self.buffer_mut().move_to_first_non_whitespace();
-            }
-            Motion::FileStart => {
-                self.buffer_mut().move_to_start();
-            }
-            Motion::FileEnd => {
-                self.buffer_mut().move_to_end();
-            }
-            Motion::FindChar {
-                ch,
-                forward,
-                stop_before,
-            } => {
-                for _ in 0..count {
-                    self.buffer_mut().find_char_on_line(*ch, *forward, *stop_before);
-                }
+                c
             }
             Motion::HalfPageDown => {
-                let half = (self.viewport.visible_lines / 2).max(1) * count;
-                for _ in 0..half {
-                    self.buffer_mut().move_down();
-                }
+                let half = (self.windows[self.active_window].viewport.visible_lines / 2).max(1) * count;
+                let mut c = cursor;
+                for _ in 0..half { c = buffer.move_down(c); }
+                c
             }
             Motion::HalfPageUp => {
-                let half = (self.viewport.visible_lines / 2).max(1) * count;
-                for _ in 0..half {
-                    self.buffer_mut().move_up();
-                }
+                let half = (self.windows[self.active_window].viewport.visible_lines / 2).max(1) * count;
+                let mut c = cursor;
+                for _ in 0..half { c = buffer.move_up(c); }
+                c
+            }
+        };
+
+        self.windows[self.active_window].cursor = new_cursor;
+    }
+
+    fn search_next(&mut self, count: usize) {
+        if self.search_pattern.is_empty() {
+            self.status_message = String::from("No search pattern");
+            return;
+        }
+        self.update_search_cache();
+        let win = &self.windows[self.active_window];
+        if win.search_matches.is_empty() {
+            self.status_message = format!("/{} [0/0]", self.search_pattern);
+            return;
+        }
+        let cursor_before = win.cursor;
+        let mut cursor = win.cursor;
+        let matches = &win.search_matches;
+        for _ in 0..count {
+            let next = matches
+                .iter()
+                .find(|&&m| m > cursor)
+                .or(matches.first());
+            if let Some(&pos) = next {
+                cursor = pos;
             }
         }
+        self.windows[self.active_window].cursor = cursor;
+
+        let matches = &self.windows[self.active_window].search_matches;
+        let total = matches.len();
+        let current = matches
+            .iter()
+            .position(|&m| m == cursor)
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let wrapped = if cursor <= cursor_before && count > 0 {
+            " [wrapped]"
+        } else {
+            ""
+        };
+        self.status_message = format!("/{} [{}/{}]{}", self.search_pattern, current, total, wrapped);
+    }
+
+    fn search_prev(&mut self, count: usize) {
+        if self.search_pattern.is_empty() {
+            self.status_message = String::from("No search pattern");
+            return;
+        }
+        self.update_search_cache();
+        let win = &self.windows[self.active_window];
+        if win.search_matches.is_empty() {
+            self.status_message = format!("?{} [0/0]", self.search_pattern);
+            return;
+        }
+        let cursor_before = win.cursor;
+        let mut cursor = win.cursor;
+        let matches = &win.search_matches;
+        for _ in 0..count {
+            let prev = matches
+                .iter()
+                .rev()
+                .find(|&&m| m < cursor)
+                .or(matches.last());
+            if let Some(&pos) = prev {
+                cursor = pos;
+            }
+        }
+        self.windows[self.active_window].cursor = cursor;
+
+        let matches = &self.windows[self.active_window].search_matches;
+        let total = matches.len();
+        let current = matches
+            .iter()
+            .position(|&m| m == cursor)
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let wrapped = if cursor >= cursor_before && count > 0 {
+            " [wrapped]"
+        } else {
+            ""
+        };
+        self.status_message = format!("?{} [{}/{}]{}", self.search_pattern, current, total, wrapped);
     }
 }

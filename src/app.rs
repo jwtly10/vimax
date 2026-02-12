@@ -3,6 +3,7 @@ use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::text_grid;
 use crate::vim::VimLayer;
+use crate::window::WindowView;
 
 use iced::keyboard;
 use iced::widget::Space;
@@ -117,13 +118,19 @@ impl Remax {
                     "key event"
                 );
 
-                let actions = self.vim.handle_key(
-                    &key,
-                    &modified_key,
-                    &modifiers,
-                    text.as_deref(),
-                    self.editor.buffer(),
-                );
+                let actions = {
+                    let view = WindowView {
+                        buffer: self.editor.buffer(),
+                        cursor: self.editor.cursor(),
+                    };
+                    self.vim.handle_key(
+                        &key,
+                        &modified_key,
+                        &modifiers,
+                        text.as_deref(),
+                        &view,
+                    )
+                };
 
                 for action in actions {
                     match self.editor.execute(action) {
@@ -141,47 +148,53 @@ impl Remax {
             Message::ScrollLines(delta) => {
                 let total = self.editor.buffer().total_lines();
                 self.editor
+                    .window_mut()
                     .viewport
                     .scroll_lines(delta, SCROLL_SPEED, total);
             }
             Message::ScrollCols(delta) => {
                 let max_len = self.editor.buffer().max_line_len();
                 self.editor
+                    .window_mut()
                     .viewport
                     .scroll_cols(delta, SCROLL_SPEED, max_len);
             }
             Message::MouseClick { x, y } => {
+                let win = self.editor.window();
                 let line =
-                    self.editor.viewport.scroll_y + (y / text_grid::LINE_HEIGHT) as usize;
-                let col = self.editor.viewport.scroll_x
+                    win.viewport.scroll_y + (y / text_grid::LINE_HEIGHT) as usize;
+                let col = win.viewport.scroll_x
                     + ((x - text_grid::GUTTER_WIDTH - 8.0).max(0.0) / text_grid::CHAR_WIDTH)
                         as usize;
-                self.editor.buffer_mut().set_cursor_position(line, col);
+                let new_cursor = self.editor.buffer().cursor_from_position(line, col);
+                self.editor.window_mut().cursor = new_cursor;
                 self.editor.ensure_cursor_visible();
             }
             Message::ViewportResized { lines, cols } => {
-                if self.editor.viewport.visible_lines != lines
-                    || self.editor.viewport.visible_cols != cols
+                let win = self.editor.window_mut();
+                if win.viewport.visible_lines != lines
+                    || win.viewport.visible_cols != cols
                 {
-                    self.editor.viewport.visible_lines = lines;
-                    self.editor.viewport.visible_cols = cols;
-                    self.editor.ensure_cursor_visible();
+                    win.viewport.visible_lines = lines;
+                    win.viewport.visible_cols = cols;
                 }
+                self.editor.ensure_cursor_visible();
             }
         }
         Task::none()
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        let (cursor_line, cursor_col) = self.editor.buffer().cursor_position();
-
-        let selection = self.editor.selection;
+        let win = self.editor.window();
+        let buffer = self.editor.buffer();
+        let (cursor_line, cursor_col) = buffer.cursor_position(win.cursor);
 
         let grid = text_grid::text_grid(
-            self.editor.buffer(),
-            self.editor.viewport.scroll_y,
-            self.editor.viewport.scroll_x,
-            selection,
+            buffer,
+            win.cursor,
+            win.viewport.scroll_y,
+            win.viewport.scroll_x,
+            win.selection,
             self.editor.search_matches(),
             self.editor.search_len(),
         );
@@ -191,7 +204,7 @@ impl Remax {
             .size(14)
             .color(iced::Color::from_rgb(mr, mg, mb));
 
-        let modified_indicator = if self.editor.buffer().is_modified() {
+        let modified_indicator = if buffer.is_modified() {
             "[+]"
         } else {
             ""
@@ -199,7 +212,7 @@ impl Remax {
 
         let buffer_name = text(format!(
             " {} {}",
-            self.editor.buffer().name(),
+            buffer.name(),
             modified_indicator
         ))
         .size(14)
@@ -269,8 +282,8 @@ fn create_scratch_buffer() -> Buffer {
     let mut buffer = Buffer::new();
     buffer.set_name("*scratch*");
     buffer.insert_str(
+        0,
         "Welcome to remax.\n\nPress 'i' to enter insert mode.\nPress 'Esc' to return to normal mode.\nUse h/j/k/l to navigate.",
     );
-    buffer.move_to_start();
     buffer
 }
