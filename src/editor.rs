@@ -6,12 +6,12 @@ use crate::action::{EditorAction, EditorEffect, Motion, Range};
 use crate::buffer::Buffer;
 use crate::registers::Registers;
 use crate::vim::mode::VimMode;
-use crate::window::Window;
+use crate::workspace::Workspace;
 
 pub struct Editor {
     pub buffers: Vec<Buffer>,
-    pub windows: Vec<Window>,
-    pub active_window: usize,
+    pub workspaces: Vec<Workspace>,
+    pub active_workspace: usize,
     pub registers: Registers,
     pub search_pattern: String,
     pub mode_display: String,
@@ -19,12 +19,12 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn new(buffer: Buffer) -> Self {
-        let window = Window::new(0);
+    pub fn new(buffer: Buffer, cwd: std::path::PathBuf) -> Self {
+        let workspace = Workspace::new(0, cwd);
         Self {
             buffers: vec![buffer],
-            windows: vec![window],
-            active_window: 0,
+            workspaces: vec![workspace],
+            active_workspace: 0,
             registers: Registers::new(),
             search_pattern: String::new(),
             mode_display: String::from("NORMAL"),
@@ -32,43 +32,51 @@ impl Editor {
         }
     }
 
-    pub fn window(&self) -> &Window {
-        &self.windows[self.active_window]
+    pub fn workspace(&self) -> &Workspace {
+        &self.workspaces[self.active_workspace]
     }
 
-    pub fn window_mut(&mut self) -> &mut Window {
-        &mut self.windows[self.active_window]
+    pub fn workspace_mut(&mut self) -> &mut Workspace {
+        &mut self.workspaces[self.active_workspace]
+    }
+
+    pub fn window(&self) -> &crate::window::Window {
+        self.workspaces[self.active_workspace].window()
+    }
+
+    pub fn window_mut(&mut self) -> &mut crate::window::Window {
+        self.workspaces[self.active_workspace].window_mut()
     }
 
     pub fn buffer(&self) -> &Buffer {
-        let buf_id = self.windows[self.active_window].buffer_id;
+        let buf_id = self.workspace().window().buffer_id;
         &self.buffers[buf_id]
     }
 
     pub fn buffer_mut(&mut self) -> &mut Buffer {
-        let buf_id = self.windows[self.active_window].buffer_id;
+        let buf_id = self.workspace().window().buffer_id;
         &mut self.buffers[buf_id]
     }
 
     pub fn cursor(&self) -> usize {
-        self.windows[self.active_window].cursor
+        self.workspace().cursor()
     }
 
     pub fn ensure_cursor_visible(&mut self) {
-        let buf_id = self.windows[self.active_window].buffer_id;
-        let buffer = &self.buffers[buf_id];
-        self.windows[self.active_window].ensure_cursor_visible(buffer);
+        let win = self.workspaces[self.active_workspace].window_mut();
+        let buf_id = win.buffer_id;
+        win.ensure_cursor_visible(&self.buffers[buf_id]);
     }
 
     pub fn update_search_cache(&mut self) {
-        let buf_id = self.windows[self.active_window].buffer_id;
-        let buffer = &self.buffers[buf_id];
-        let pattern = &self.search_pattern;
-        self.windows[self.active_window].update_search_cache(buffer, pattern);
+        let win = self.workspaces[self.active_workspace].window_mut();
+        let buf_id = win.buffer_id;
+        let pattern = self.search_pattern.clone();
+        win.update_search_cache(&self.buffers[buf_id], &pattern);
     }
 
     pub fn search_matches(&self) -> &[usize] {
-        &self.windows[self.active_window].search_matches
+        &self.workspace().window().search_matches
     }
 
     pub fn search_len(&self) -> usize {
@@ -78,9 +86,7 @@ impl Editor {
     pub fn open_file(&mut self, path: &Path) {
         let path_str = path.to_string_lossy().to_string();
         if let Some(idx) = self.buffers.iter().position(|b| b.file_path() == Some(&path_str)) {
-            self.windows[self.active_window].buffer_id = idx;
-            self.windows[self.active_window].cursor = 0;
-            self.windows[self.active_window].selection = None;
+            self.workspace_mut().reset_window_for_buffer(idx);
             self.status_message = format!("\"{}\"", path.display());
             return;
         }
@@ -95,10 +101,7 @@ impl Editor {
                 let buffer = Buffer::from_str(&content, &buf_name, path, false);
                 let buf_id = self.buffers.len();
                 self.buffers.push(buffer);
-                self.windows[self.active_window].buffer_id = buf_id;
-                self.windows[self.active_window].cursor = 0;
-                self.windows[self.active_window].selection = None;
-                self.windows[self.active_window].viewport = crate::viewport::Viewport::new();
+                self.workspace_mut().reset_window_for_buffer(buf_id);
                 self.status_message = format!("\"{}\"", path.display());
             }
             Err(e) => {
@@ -111,14 +114,10 @@ impl Editor {
         if self.buffers.len() <= 1 {
             return;
         }
-        let current = self.windows[self.active_window].buffer_id;
+        let current = self.workspace().window().buffer_id;
         let next = (current + 1) % self.buffers.len();
-        self.windows[self.active_window].buffer_id = next;
-        self.windows[self.active_window].cursor =
-            self.windows[self.active_window].cursor.min(
-                self.buffers[next].len_chars().saturating_sub(1),
-            );
-        self.windows[self.active_window].selection = None;
+        let len_chars = self.buffers[next].len_chars();
+        self.workspace_mut().switch_buffer(next, len_chars);
         self.status_message = format!("\"{}\"", self.buffers[next].name());
     }
 
@@ -126,18 +125,14 @@ impl Editor {
         if self.buffers.len() <= 1 {
             return;
         }
-        let current = self.windows[self.active_window].buffer_id;
+        let current = self.workspace().window().buffer_id;
         let prev = if current == 0 {
             self.buffers.len() - 1
         } else {
             current - 1
         };
-        self.windows[self.active_window].buffer_id = prev;
-        self.windows[self.active_window].cursor =
-            self.windows[self.active_window].cursor.min(
-                self.buffers[prev].len_chars().saturating_sub(1),
-            );
-        self.windows[self.active_window].selection = None;
+        let len_chars = self.buffers[prev].len_chars();
+        self.workspace_mut().switch_buffer(prev, len_chars);
         self.status_message = format!("\"{}\"", self.buffers[prev].name());
     }
 
@@ -146,23 +141,19 @@ impl Editor {
             self.status_message = String::from("Cannot close last buffer");
             return;
         }
-        let buf_id = self.windows[self.active_window].buffer_id;
+        let buf_id = self.workspace().window().buffer_id;
         if self.buffers[buf_id].is_modified() {
             self.status_message =
                 String::from("Unsaved changes! Use :bd! to force close");
             return;
         }
         self.buffers.remove(buf_id);
-        for win in &mut self.windows {
-            if win.buffer_id == buf_id {
-                win.buffer_id = buf_id.min(self.buffers.len() - 1);
-                win.cursor = 0;
-                win.selection = None;
-            } else if win.buffer_id > buf_id {
-                win.buffer_id -= 1;
-            }
+        let buf_count = self.buffers.len();
+        for ws in &mut self.workspaces {
+            ws.fix_buffer_ids_after_remove(buf_id, buf_count);
         }
-        self.status_message = format!("\"{}\"", self.buffers[self.windows[self.active_window].buffer_id].name());
+        let new_buf_id = self.workspace().window().buffer_id;
+        self.status_message = format!("\"{}\"", self.buffers[new_buf_id].name());
     }
 
     pub fn execute(&mut self, action: EditorAction) -> EditorEffect {
@@ -353,8 +344,10 @@ impl Editor {
     }
 
     fn move_cursor(&mut self, motion: &Motion, count: usize) {
-        let buf_id = self.windows[self.active_window].buffer_id;
-        let cursor = self.windows[self.active_window].cursor;
+        let ws = &self.workspaces[self.active_workspace];
+        let win = ws.window();
+        let buf_id = win.buffer_id;
+        let cursor = win.cursor;
         let buffer = &self.buffers[buf_id];
 
         let new_cursor = match motion {
@@ -406,20 +399,20 @@ impl Editor {
                 c
             }
             Motion::HalfPageDown => {
-                let half = (self.windows[self.active_window].viewport.visible_lines / 2).max(1) * count;
+                let half = (win.viewport.visible_lines / 2).max(1) * count;
                 let mut c = cursor;
                 for _ in 0..half { c = buffer.move_down(c); }
                 c
             }
             Motion::HalfPageUp => {
-                let half = (self.windows[self.active_window].viewport.visible_lines / 2).max(1) * count;
+                let half = (win.viewport.visible_lines / 2).max(1) * count;
                 let mut c = cursor;
                 for _ in 0..half { c = buffer.move_up(c); }
                 c
             }
         };
 
-        self.windows[self.active_window].cursor = new_cursor;
+        self.workspace_mut().window_mut().cursor = new_cursor;
     }
 
     fn search_next(&mut self, count: usize) {
@@ -428,7 +421,7 @@ impl Editor {
             return;
         }
         self.update_search_cache();
-        let win = &self.windows[self.active_window];
+        let win = self.workspace().window();
         if win.search_matches.is_empty() {
             self.status_message = format!("/{} [0/0]", self.search_pattern);
             return;
@@ -445,9 +438,9 @@ impl Editor {
                 cursor = pos;
             }
         }
-        self.windows[self.active_window].cursor = cursor;
+        self.workspace_mut().window_mut().cursor = cursor;
 
-        let matches = &self.windows[self.active_window].search_matches;
+        let matches = &self.workspace().window().search_matches;
         let total = matches.len();
         let current = matches
             .iter()
@@ -468,7 +461,7 @@ impl Editor {
             return;
         }
         self.update_search_cache();
-        let win = &self.windows[self.active_window];
+        let win = self.workspace().window();
         if win.search_matches.is_empty() {
             self.status_message = format!("?{} [0/0]", self.search_pattern);
             return;
@@ -486,9 +479,9 @@ impl Editor {
                 cursor = pos;
             }
         }
-        self.windows[self.active_window].cursor = cursor;
+        self.workspace_mut().window_mut().cursor = cursor;
 
-        let matches = &self.windows[self.active_window].search_matches;
+        let matches = &self.workspace().window().search_matches;
         let total = matches.len();
         let current = matches
             .iter()

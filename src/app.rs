@@ -62,10 +62,11 @@ impl Remax {
             create_scratch_buffer()
         };
 
-        info!("editor booted");
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        info!(?cwd, "editor booted");
         (
             Self {
-                editor: Editor::new(buffer),
+                editor: Editor::new(buffer, cwd),
                 vim: VimLayer::new(),
             },
             Task::none(),

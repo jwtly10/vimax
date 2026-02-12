@@ -8,6 +8,7 @@ mod undo;
 mod vim;
 mod viewport;
 mod window;
+mod workspace;
 
 use app::Remax;
 use tracing::info;
