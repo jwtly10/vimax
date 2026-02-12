@@ -168,6 +168,14 @@ pub fn resolve(
         "buffer.force_quit" => vec![EditorAction::Quit { force: true }],
         "buffer.write_quit" => vec![EditorAction::WriteQuit],
 
+        "window.vsplit" => vec![EditorAction::VSplit],
+        "window.hsplit" => vec![EditorAction::HSplit],
+        "window.close" => vec![EditorAction::CloseWindow],
+        "window.focus_left" => vec![EditorAction::FocusLeft],
+        "window.focus_right" => vec![EditorAction::FocusRight],
+        "window.focus_up" => vec![EditorAction::FocusUp],
+        "window.focus_down" => vec![EditorAction::FocusDown],
+
         _ => vec![],
     }
 }

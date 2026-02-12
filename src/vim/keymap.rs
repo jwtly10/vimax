@@ -170,6 +170,13 @@ pub fn build_global_keymap() -> Keymap {
     km.bind(vec![KeyPress::char('d').ctrl()], "scroll.half_down");
     km.bind(vec![KeyPress::char('u').ctrl()], "scroll.half_up");
     km.bind(vec![KeyPress::char('s').cmd()], "buffer.save");
+    km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('v')], "window.vsplit");
+    km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('s')], "window.hsplit");
+    km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('c')], "window.close");
+    km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('h')], "window.focus_left");
+    km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('j')], "window.focus_down");
+    km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('k')], "window.focus_up");
+    km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('l')], "window.focus_right");
     km
 }
 

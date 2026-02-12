@@ -66,6 +66,13 @@ pub enum EditorAction {
     NextBuffer,
     PrevBuffer,
     CloseBuffer,
+    VSplit,
+    HSplit,
+    CloseWindow,
+    FocusLeft,
+    FocusRight,
+    FocusUp,
+    FocusDown,
 }
 
 pub enum EditorEffect {

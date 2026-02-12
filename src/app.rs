@@ -1,6 +1,7 @@
 use crate::action::EditorEffect;
 use crate::buffer::Buffer;
 use crate::editor::Editor;
+use crate::layout::{LayoutNode, SplitDirection};
 use crate::text_grid;
 use crate::vim::VimLayer;
 use crate::window::WindowView;
@@ -27,15 +28,23 @@ pub enum Message {
         text: Option<smol_str::SmolStr>,
     },
     WindowCloseRequested(window::Id),
-    ScrollLines(f32),
-    ScrollCols(f32),
+    ScrollLines {
+        delta: f32,
+        window_id: usize,
+    },
+    ScrollCols {
+        delta: f32,
+        window_id: usize,
+    },
     MouseClick {
         x: f32,
         y: f32,
+        window_id: usize,
     },
     ViewportResized {
         lines: usize,
         cols: usize,
+        window_id: usize,
     },
 }
 
@@ -146,38 +155,52 @@ impl Remax {
                 self.editor.update_search_cache();
                 self.editor.ensure_cursor_visible();
             }
-            Message::ScrollLines(delta) => {
-                let total = self.editor.buffer().total_lines();
-                self.editor
-                    .window_mut()
-                    .viewport
-                    .scroll_lines(delta, SCROLL_SPEED, total);
+            Message::ScrollLines { delta, window_id } => {
+                let ws = self.editor.workspace_mut();
+                if window_id < ws.windows.len() {
+                    let buf_id = ws.windows[window_id].buffer_id;
+                    let total = self.editor.buffers[buf_id].total_lines();
+                    self.editor.workspace_mut().windows[window_id]
+                        .viewport
+                        .scroll_lines(delta, SCROLL_SPEED, total);
+                }
             }
-            Message::ScrollCols(delta) => {
-                let max_len = self.editor.buffer().max_line_len();
-                self.editor
-                    .window_mut()
-                    .viewport
-                    .scroll_cols(delta, SCROLL_SPEED, max_len);
+            Message::ScrollCols { delta, window_id } => {
+                let ws = self.editor.workspace_mut();
+                if window_id < ws.windows.len() {
+                    let buf_id = ws.windows[window_id].buffer_id;
+                    let max_len = self.editor.buffers[buf_id].max_line_len();
+                    self.editor.workspace_mut().windows[window_id]
+                        .viewport
+                        .scroll_cols(delta, SCROLL_SPEED, max_len);
+                }
             }
-            Message::MouseClick { x, y } => {
-                let win = self.editor.window();
-                let line =
-                    win.viewport.scroll_y + (y / text_grid::LINE_HEIGHT) as usize;
-                let col = win.viewport.scroll_x
-                    + ((x - text_grid::GUTTER_WIDTH - 8.0).max(0.0) / text_grid::CHAR_WIDTH)
-                        as usize;
-                let new_cursor = self.editor.buffer().cursor_from_position(line, col);
-                self.editor.window_mut().cursor = new_cursor;
-                self.editor.ensure_cursor_visible();
+            Message::MouseClick { x, y, window_id } => {
+                let ws = self.editor.workspace_mut();
+                ws.active_window = window_id;
+                if window_id < ws.windows.len() {
+                    let win = &ws.windows[window_id];
+                    let line =
+                        win.viewport.scroll_y + (y / text_grid::LINE_HEIGHT) as usize;
+                    let col = win.viewport.scroll_x
+                        + ((x - text_grid::GUTTER_WIDTH - 8.0).max(0.0) / text_grid::CHAR_WIDTH)
+                            as usize;
+                    let buf_id = win.buffer_id;
+                    let new_cursor = self.editor.buffers[buf_id].cursor_from_position(line, col);
+                    self.editor.workspace_mut().windows[window_id].cursor = new_cursor;
+                    self.editor.ensure_cursor_visible();
+                }
             }
-            Message::ViewportResized { lines, cols } => {
-                let win = self.editor.window_mut();
-                if win.viewport.visible_lines != lines
-                    || win.viewport.visible_cols != cols
-                {
-                    win.viewport.visible_lines = lines;
-                    win.viewport.visible_cols = cols;
+            Message::ViewportResized { lines, cols, window_id } => {
+                let ws = self.editor.workspace_mut();
+                if window_id < ws.windows.len() {
+                    let win = &mut ws.windows[window_id];
+                    if win.viewport.visible_lines != lines
+                        || win.viewport.visible_cols != cols
+                    {
+                        win.viewport.visible_lines = lines;
+                        win.viewport.visible_cols = cols;
+                    }
                 }
                 self.editor.ensure_cursor_visible();
             }
@@ -186,26 +209,21 @@ impl Remax {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        let win = self.editor.window();
-        let buffer = self.editor.buffer();
-        let (cursor_line, cursor_col) = buffer.cursor_position(win.cursor);
+        let ws = self.editor.workspace();
+        let active_win_id = ws.active_window;
 
-        let grid = text_grid::text_grid(
-            buffer,
-            win.cursor,
-            win.viewport.scroll_y,
-            win.viewport.scroll_x,
-            win.selection,
-            self.editor.search_matches(),
-            self.editor.search_len(),
-        );
+        let editor_area = self.build_layout_view(&ws.layout, ws, active_win_id);
+
+        let active_buf = self.editor.buffer();
+        let active_win = ws.window();
+        let (cursor_line, cursor_col) = active_buf.cursor_position(active_win.cursor);
 
         let (mr, mg, mb) = self.vim.mode_color();
         let mode_label = text(format!(" {} ", self.vim.mode()))
             .size(14)
             .color(iced::Color::from_rgb(mr, mg, mb));
 
-        let modified_indicator = if buffer.is_modified() {
+        let modified_indicator = if active_buf.is_modified() {
             "[+]"
         } else {
             ""
@@ -213,7 +231,7 @@ impl Remax {
 
         let buffer_name = text(format!(
             " {} {}",
-            buffer.name(),
+            active_buf.name(),
             modified_indicator
         ))
         .size(14)
@@ -254,7 +272,7 @@ impl Remax {
         .width(Length::Fill)
         .padding([2, 0]);
 
-        let content = column![grid, modeline, cmdline];
+        let content = column![editor_area, modeline, cmdline];
 
         container(content)
             .width(Length::Fill)
@@ -266,6 +284,67 @@ impl Remax {
                 ..Default::default()
             })
             .into()
+    }
+
+    fn build_layout_view<'a>(
+        &'a self,
+        node: &LayoutNode,
+        ws: &'a crate::workspace::Workspace,
+        active_win_id: usize,
+    ) -> Element<'a, Message> {
+        match node {
+            LayoutNode::Leaf(win_id) => {
+                let win = &ws.windows[*win_id];
+                let buffer = &self.editor.buffers[win.buffer_id];
+                let is_active = *win_id == active_win_id;
+
+                let grid = text_grid::text_grid(
+                    buffer,
+                    win.cursor,
+                    win.viewport.scroll_y,
+                    win.viewport.scroll_x,
+                    win.selection,
+                    &win.search_matches,
+                    if is_active { self.editor.search_len() } else { 0 },
+                    *win_id,
+                    is_active,
+                );
+
+                container(grid)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
+            }
+            LayoutNode::Split { direction, children, .. } => {
+                let first = self.build_layout_view(&children[0], ws, active_win_id);
+                let second = self.build_layout_view(&children[1], ws, active_win_id);
+
+                let separator_color = iced::Color::from_rgb(0.3, 0.3, 0.35);
+
+                match direction {
+                    SplitDirection::Vertical => {
+                        let sep = container(Space::new())
+                            .width(Length::Fixed(1.0))
+                            .height(Length::Fill)
+                            .style(move |_theme: &Theme| container::Style {
+                                background: Some(iced::Background::Color(separator_color)),
+                                ..Default::default()
+                            });
+                        row![first, sep, second].into()
+                    }
+                    SplitDirection::Horizontal => {
+                        let sep = container(Space::new())
+                            .width(Length::Fill)
+                            .height(Length::Fixed(1.0))
+                            .style(move |_theme: &Theme| container::Style {
+                                background: Some(iced::Background::Color(separator_color)),
+                                ..Default::default()
+                            });
+                        column![first, sep, second].into()
+                    }
+                }
+            }
+        }
     }
 }
 

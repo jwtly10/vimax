@@ -1,11 +1,13 @@
 use std::path::PathBuf;
 
+use crate::layout::{LayoutNode, SplitDirection};
 use crate::viewport::Viewport;
 use crate::window::Window;
 
 pub struct Workspace {
     pub windows: Vec<Window>,
     pub active_window: usize,
+    pub layout: LayoutNode,
     pub cwd: PathBuf,
 }
 
@@ -14,6 +16,7 @@ impl Workspace {
         Self {
             windows: vec![Window::new(buffer_id)],
             active_window: 0,
+            layout: LayoutNode::single(0),
             cwd,
         }
     }
@@ -43,6 +46,35 @@ impl Workspace {
         win.cursor = 0;
         win.selection = None;
         win.viewport = Viewport::new();
+    }
+
+    pub fn split(&mut self, direction: SplitDirection) {
+        let current_buf_id = self.windows[self.active_window].buffer_id;
+        let new_window = Window::new(current_buf_id);
+        let new_id = self.windows.len();
+        self.windows.push(new_window);
+        self.layout.split_leaf(self.active_window, new_id, direction);
+        self.active_window = new_id;
+    }
+
+    pub fn close_window(&mut self) -> bool {
+        if self.layout.leaf_count() <= 1 {
+            return false;
+        }
+        let removed = self.active_window;
+        self.layout.remove_leaf(removed);
+        self.windows.remove(removed);
+        self.layout.fix_ids_after_remove(removed);
+        if self.active_window >= self.windows.len() || self.active_window == removed {
+            self.active_window = self.layout.first_leaf();
+        }
+        true
+    }
+
+    pub fn focus_direction(&mut self, direction: SplitDirection, forward: bool) {
+        if let Some(target) = self.layout.neighbor(self.active_window, direction, forward) {
+            self.active_window = target;
+        }
     }
 
     pub fn fix_buffer_ids_after_remove(&mut self, removed: usize, buf_count: usize) {

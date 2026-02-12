@@ -4,6 +4,7 @@ use tracing::{error, info};
 
 use crate::action::{EditorAction, EditorEffect, Motion, Range};
 use crate::buffer::Buffer;
+use crate::layout::SplitDirection;
 use crate::registers::Registers;
 use crate::vim::mode::VimMode;
 use crate::workspace::Workspace;
@@ -40,10 +41,6 @@ impl Editor {
         &mut self.workspaces[self.active_workspace]
     }
 
-    pub fn window(&self) -> &crate::window::Window {
-        self.workspaces[self.active_workspace].window()
-    }
-
     pub fn window_mut(&mut self) -> &mut crate::window::Window {
         self.workspaces[self.active_workspace].window_mut()
     }
@@ -73,10 +70,6 @@ impl Editor {
         let buf_id = win.buffer_id;
         let pattern = self.search_pattern.clone();
         win.update_search_cache(&self.buffers[buf_id], &pattern);
-    }
-
-    pub fn search_matches(&self) -> &[usize] {
-        &self.workspace().window().search_matches
     }
 
     pub fn search_len(&self) -> usize {
@@ -304,6 +297,30 @@ impl Editor {
             }
             EditorAction::CloseBuffer => {
                 self.close_buffer();
+            }
+            EditorAction::VSplit => {
+                self.workspace_mut().split(SplitDirection::Vertical);
+            }
+            EditorAction::HSplit => {
+                self.workspace_mut().split(SplitDirection::Horizontal);
+            }
+            EditorAction::CloseWindow => {
+                let ws = &mut self.workspaces[self.active_workspace];
+                if !ws.close_window() {
+                    self.status_message = String::from("Cannot close last window");
+                }
+            }
+            EditorAction::FocusLeft => {
+                self.workspace_mut().focus_direction(SplitDirection::Vertical, false);
+            }
+            EditorAction::FocusRight => {
+                self.workspace_mut().focus_direction(SplitDirection::Vertical, true);
+            }
+            EditorAction::FocusUp => {
+                self.workspace_mut().focus_direction(SplitDirection::Horizontal, false);
+            }
+            EditorAction::FocusDown => {
+                self.workspace_mut().focus_direction(SplitDirection::Horizontal, true);
             }
             EditorAction::SetMode(mode) => {
                 self.mode_display = mode;

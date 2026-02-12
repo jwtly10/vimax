@@ -2,6 +2,7 @@ mod action;
 mod app;
 mod buffer;
 mod editor;
+mod layout;
 mod registers;
 mod text_grid;
 mod undo;

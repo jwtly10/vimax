@@ -88,6 +88,7 @@ pub struct InputState {
     pub mode: VimMode,
     pub selection_anchor: Option<usize>,
     pub pending_keys: Vec<KeyPress>,
+    pub pending_global_keys: Vec<KeyPress>,
     pub count_accum: Option<usize>,
     pub command_line: String,
     pub pending_operator: Option<Operator>,
@@ -103,6 +104,7 @@ impl InputState {
             mode: VimMode::Normal,
             selection_anchor: None,
             pending_keys: Vec::new(),
+            pending_global_keys: Vec::new(),
             count_accum: None,
             command_line: String::new(),
             pending_operator: None,
@@ -335,13 +337,45 @@ impl InputState {
         mode_keymap: &Keymap,
         buf: &dyn BufferQuery,
     ) -> Vec<EditorAction> {
-        if (modifiers.control() || modifiers.command() || modifiers.alt())
+        if is_bare_modifier(key) {
+            return vec![];
+        }
+
+        if !self.pending_global_keys.is_empty() {
+            if let Some(kp) = KeyPress::from_iced(modified_key, modifiers)
+                .or_else(|| KeyPress::from_iced(key, modifiers))
+            {
+                self.pending_global_keys.push(kp);
+                match global_keymap.lookup(&self.pending_global_keys) {
+                    KeymapLookup::Match(cmd) => {
+                        self.pending_global_keys.clear();
+                        let count = self.count_accum.unwrap_or(1);
+                        self.count_accum = None;
+                        return commands::resolve(cmd, count, self, buf);
+                    }
+                    KeymapLookup::Pending => return vec![],
+                    KeymapLookup::NoMatch => {
+                        self.pending_global_keys.clear();
+                    }
+                }
+            } else {
+                self.pending_global_keys.clear();
+            }
+        } else if (modifiers.control() || modifiers.command() || modifiers.alt())
             && let Some(kp) = KeyPress::from_iced(modified_key, modifiers)
-            && let KeymapLookup::Match(cmd) = global_keymap.lookup(&[kp])
         {
-            let count = self.count_accum.unwrap_or(1);
-            self.count_accum = None;
-            return commands::resolve(cmd, count, self, buf);
+            match global_keymap.lookup(&[kp]) {
+                KeymapLookup::Match(cmd) => {
+                    let count = self.count_accum.unwrap_or(1);
+                    self.count_accum = None;
+                    return commands::resolve(cmd, count, self, buf);
+                }
+                KeymapLookup::Pending => {
+                    self.pending_global_keys.push(kp);
+                    return vec![];
+                }
+                KeymapLookup::NoMatch => {}
+            }
         }
 
         match self.mode {
@@ -930,6 +964,9 @@ impl InputState {
             "bn" | "bnext" => vec![EditorAction::NextBuffer],
             "bp" | "bprev" | "bprevious" => vec![EditorAction::PrevBuffer],
             "bd" | "bdelete" => vec![EditorAction::CloseBuffer],
+            "vs" | "vsplit" => vec![EditorAction::VSplit],
+            "sp" | "split" => vec![EditorAction::HSplit],
+            "close" => vec![EditorAction::CloseWindow],
             _ if trimmed.starts_with("e ") || trimmed.starts_with("edit ") => {
                 let path = trimmed
                     .strip_prefix("e ")
