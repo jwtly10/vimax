@@ -297,8 +297,13 @@ impl Buffer {
         };
         self.modified = true;
         self.version += 1;
-        self.undo_stack
-            .push_edit(EditKind::Insert { pos, text: text.to_string() }, cursor);
+        self.undo_stack.push_edit(
+            EditKind::Insert {
+                pos,
+                text: text.to_string(),
+            },
+            cursor,
+        );
         new_cursor
     }
 
@@ -321,8 +326,13 @@ impl Buffer {
         };
         self.modified = true;
         self.version += 1;
-        self.undo_stack
-            .push_edit(EditKind::Insert { pos, text: text.to_string() }, cursor);
+        self.undo_stack.push_edit(
+            EditKind::Insert {
+                pos,
+                text: text.to_string(),
+            },
+            cursor,
+        );
         new_cursor
     }
 
@@ -439,13 +449,34 @@ impl Buffer {
         if cursor >= len {
             return cursor;
         }
+
         let mut pos = cursor;
-        while pos < len && !self.char_at(pos).is_whitespace() {
-            pos += 1;
+        let start_char = self.char_at(pos);
+
+        let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
+
+        if is_word_char(start_char) {
+            while pos < len && is_word_char(self.char_at(pos)) {
+                pos += 1;
+            }
+        } else if start_char.is_whitespace() {
+            while pos < len && self.char_at(pos).is_whitespace() {
+                pos += 1;
+            }
+        } else {
+            while pos < len {
+                let c = self.char_at(pos);
+                if is_word_char(c) || c.is_whitespace() {
+                    break;
+                }
+                pos += 1;
+            }
         }
+
         while pos < len && self.char_at(pos).is_whitespace() {
             pos += 1;
         }
+
         pos
     }
 
@@ -453,13 +484,34 @@ impl Buffer {
         if cursor == 0 {
             return cursor;
         }
+
         let mut pos = cursor;
+        let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
+
         while pos > 0 && self.char_at(pos - 1).is_whitespace() {
             pos -= 1;
         }
-        while pos > 0 && !self.char_at(pos - 1).is_whitespace() {
-            pos -= 1;
+
+        if pos == 0 {
+            return pos;
         }
+
+        let start_char = self.char_at(pos - 1);
+
+        if is_word_char(start_char) {
+            while pos > 0 && is_word_char(self.char_at(pos - 1)) {
+                pos -= 1;
+            }
+        } else {
+            while pos > 0 {
+                let c = self.char_at(pos - 1);
+                if is_word_char(c) || c.is_whitespace() {
+                    break;
+                }
+                pos -= 1;
+            }
+        }
+
         pos
     }
 
@@ -478,7 +530,13 @@ impl Buffer {
         pos
     }
 
-    pub fn find_char_on_line(&self, cursor: usize, ch: char, forward: bool, stop_before: bool) -> usize {
+    pub fn find_char_on_line(
+        &self,
+        cursor: usize,
+        ch: char,
+        forward: bool,
+        stop_before: bool,
+    ) -> usize {
         let (line, col) = self.cursor_position(cursor);
         let line_start = self.rope.line_to_char(line);
         let line_len = self.line_len_no_newline(line);
@@ -540,7 +598,13 @@ impl Buffer {
         (start, end)
     }
 
-    pub fn text_object_delimited(&self, cursor: usize, open: char, close: char, include: bool) -> (usize, usize) {
+    pub fn text_object_delimited(
+        &self,
+        cursor: usize,
+        open: char,
+        close: char,
+        include: bool,
+    ) -> (usize, usize) {
         let len = self.rope.len_chars();
         if len == 0 {
             return (0, 0);
@@ -825,8 +889,7 @@ impl Buffer {
                         }
                     }
                 }
-                Motion::HalfPageDown | Motion::HalfPageUp => {
-                }
+                Motion::HalfPageDown | Motion::HalfPageUp => {}
             }
         }
         pos
