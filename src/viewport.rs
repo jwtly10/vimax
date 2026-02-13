@@ -17,7 +17,12 @@ impl Viewport {
         }
     }
 
-    pub fn ensure_cursor_visible(&mut self, cursor_line: usize, cursor_col: usize, total_lines: usize) {
+    pub fn ensure_cursor_visible(
+        &mut self,
+        cursor_line: usize,
+        cursor_col: usize,
+        total_lines: usize,
+    ) {
         if self.visible_lines > SCROLL_MARGIN * 2 {
             if cursor_line < self.scroll_y + SCROLL_MARGIN {
                 self.scroll_y = cursor_line.saturating_sub(SCROLL_MARGIN);
@@ -43,7 +48,7 @@ impl Viewport {
     }
 
     pub fn scroll_lines(&mut self, delta: f32, speed: f32, total_lines: usize) {
-        let new_y = (self.scroll_y as f32 - delta * speed).round();
+        let new_y = self.scroll_y as f32 - delta * speed;
         let max_scroll = total_lines.saturating_sub(1);
         self.scroll_y = (new_y.max(0.0) as usize).min(max_scroll);
     }

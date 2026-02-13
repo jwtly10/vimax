@@ -157,10 +157,23 @@ impl Remax {
                 let ws = self.editor.workspace_mut();
                 if window_id < ws.windows.len() {
                     let buf_id = ws.windows[window_id].buffer_id;
+                    let old_scroll = ws.windows[window_id].viewport.scroll_y;
+                    let cursor = ws.windows[window_id].cursor;
                     let total = self.editor.buffers[buf_id].total_lines();
-                    self.editor.workspace_mut().windows[window_id]
+                    let (cur_line, cur_col) = self.editor.buffers[buf_id].cursor_position(cursor);
+
+                    let ws = self.editor.workspace_mut();
+                    ws.windows[window_id]
                         .viewport
                         .scroll_lines(delta, SCROLL_SPEED, total);
+                    let new_scroll = ws.windows[window_id].viewport.scroll_y;
+                    let scroll_delta = new_scroll as isize - old_scroll as isize;
+                    if scroll_delta != 0 {
+                        let new_line = (cur_line as isize + scroll_delta).max(0) as usize;
+                        let new_cursor = self.editor.buffers[buf_id]
+                            .cursor_from_position(new_line, cur_col);
+                        self.editor.workspace_mut().windows[window_id].cursor = new_cursor;
+                    }
                 }
             }
             Message::ScrollCols { delta, window_id } => {
@@ -193,15 +206,22 @@ impl Remax {
                 cols,
                 window_id,
             } => {
-                let ws = self.editor.workspace_mut();
-                if window_id < ws.windows.len() {
-                    let win = &mut ws.windows[window_id];
-                    if win.viewport.visible_lines != lines || win.viewport.visible_cols != cols {
-                        win.viewport.visible_lines = lines;
-                        win.viewport.visible_cols = cols;
+                let mut resized = false;
+                {
+                    let ws = self.editor.workspace_mut();
+                    if window_id < ws.windows.len() {
+                        let win = &mut ws.windows[window_id];
+                        if win.viewport.visible_lines != lines || win.viewport.visible_cols != cols
+                        {
+                            win.viewport.visible_lines = lines;
+                            win.viewport.visible_cols = cols;
+                            resized = true;
+                        }
                     }
                 }
-                self.editor.ensure_cursor_visible();
+                if resized {
+                    self.editor.ensure_cursor_visible();
+                }
             }
         }
         Task::none()
