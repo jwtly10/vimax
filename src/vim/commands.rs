@@ -69,6 +69,7 @@ pub fn resolve(
             count,
         }],
 
+        "edit.delete_till_eol" => vec![EditorAction::DeleteTillEndOfLine],
         "edit.delete_char_forward" => vec![EditorAction::DeleteCharForward { count }],
         "edit.delete_line" => vec![EditorAction::DeleteLine { count }],
         "edit.undo" => vec![EditorAction::Undo],

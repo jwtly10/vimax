@@ -39,6 +39,7 @@ pub enum EditorAction {
     InsertChar(char),
     InsertNewline,
     InsertTab,
+    DeleteTillEndOfLine,
     DeleteCharForward { count: usize },
     DeleteCharBackward,
     DeleteLine { count: usize },

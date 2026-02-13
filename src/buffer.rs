@@ -215,6 +215,28 @@ impl Buffer {
         }
     }
 
+    pub fn delete_till_eol(&mut self, cursor: usize) -> usize {
+        let line_idx = self.rope.char_to_line(cursor);
+        let line_start = self.rope.line_to_char(line_idx);
+        let eol = line_start + self.line_len_no_newline(line_idx);
+
+        if cursor >= self.rope.len_chars() {
+            return cursor;
+        }
+        let deleted: String = self.rope.slice(cursor..eol).into();
+        self.rope.remove(cursor..eol);
+        self.modified = true;
+        self.version += 1;
+        self.undo_stack.push_edit(
+            EditKind::Delete {
+                pos: cursor,
+                text: deleted,
+            },
+            cursor,
+        );
+        cursor
+    }
+
     pub fn delete_char_forward(&mut self, cursor: usize) -> usize {
         if cursor < self.rope.len_chars() {
             self.modified = true;
@@ -893,5 +915,73 @@ impl Buffer {
             }
         }
         pos
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn test_buf(text: &str) -> Buffer {
+        Buffer::from_str(text, "test", Path::new("test.txt"), false)
+    }
+
+    #[test]
+    fn delete_till_eol_middle_of_line() {
+        let mut buf = test_buf("hello world\n");
+        let cursor = 6;
+        assert_eq!(buf.rope().char(cursor), 'w');
+        let new_cursor = buf.delete_till_eol(cursor);
+        let text: String = buf.rope().into();
+        assert_eq!(text, "hello \n");
+        assert_eq!(new_cursor, 6);
+    }
+
+    #[test]
+    fn delete_till_eol_start_of_line() {
+        let mut buf = test_buf("hello\n");
+        let new_cursor = buf.delete_till_eol(0);
+        let text: String = buf.rope().into();
+        assert_eq!(text, "\n");
+        assert_eq!(new_cursor, 0);
+    }
+
+    #[test]
+    fn delete_till_eol_already_at_eol() {
+        let mut buf = test_buf("hi\n");
+        let new_cursor = buf.delete_till_eol(2); // '\n'
+        let text: String = buf.rope().into();
+        assert_eq!(text, "hi\n");
+        assert_eq!(new_cursor, 2);
+    }
+
+    #[test]
+    fn delete_till_eol_second_line() {
+        let mut buf = test_buf("aaa\nbbb ccc\n");
+        let cursor = 7; //              ^
+        assert_eq!(buf.rope().char(cursor), ' ');
+        let new_cursor = buf.delete_till_eol(cursor);
+        let text: String = buf.rope().into();
+        assert_eq!(text, "aaa\nbbb\n");
+        assert_eq!(new_cursor, 7);
+    }
+
+    #[test]
+    fn delete_till_eol_last_line_no_trailing_newline() {
+        let mut buf = test_buf("hello");
+        let new_cursor = buf.delete_till_eol(3);
+        let text: String = buf.rope().into();
+        assert_eq!(text, "hel");
+        assert_eq!(new_cursor, 3);
+    }
+
+    #[test]
+    fn delete_till_eol_empty_line() {
+        let mut buf = test_buf("abc\n\nxyz\n");
+        let new_cursor = buf.delete_till_eol(4);
+        let text: String = buf.rope().into();
+        assert_eq!(text, "abc\n\nxyz\n");
+        assert_eq!(new_cursor, 4);
     }
 }

@@ -170,13 +170,34 @@ pub fn build_global_keymap() -> Keymap {
     km.bind(vec![KeyPress::char('d').ctrl()], "scroll.half_down");
     km.bind(vec![KeyPress::char('u').ctrl()], "scroll.half_up");
     km.bind(vec![KeyPress::char('s').cmd()], "buffer.save");
-    km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('v')], "window.vsplit");
-    km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('s')], "window.hsplit");
-    km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('c')], "window.close");
-    km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('h')], "window.focus_left");
-    km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('j')], "window.focus_down");
-    km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('k')], "window.focus_up");
-    km.bind(vec![KeyPress::char('w').ctrl(), KeyPress::char('l')], "window.focus_right");
+    km.bind(
+        vec![KeyPress::char('w').ctrl(), KeyPress::char('v')],
+        "window.vsplit",
+    );
+    km.bind(
+        vec![KeyPress::char('w').ctrl(), KeyPress::char('s')],
+        "window.hsplit",
+    );
+    km.bind(
+        vec![KeyPress::char('w').ctrl(), KeyPress::char('c')],
+        "window.close",
+    );
+    km.bind(
+        vec![KeyPress::char('w').ctrl(), KeyPress::char('h')],
+        "window.focus_left",
+    );
+    km.bind(
+        vec![KeyPress::char('w').ctrl(), KeyPress::char('j')],
+        "window.focus_down",
+    );
+    km.bind(
+        vec![KeyPress::char('w').ctrl(), KeyPress::char('k')],
+        "window.focus_up",
+    );
+    km.bind(
+        vec![KeyPress::char('w').ctrl(), KeyPress::char('l')],
+        "window.focus_right",
+    );
     km.bind(vec![KeyPress::char('c').cmd()], "system.copy");
     km.bind(vec![KeyPress::char('x').cmd()], "system.cut");
     km.bind(vec![KeyPress::char('v').cmd()], "system.paste");
@@ -219,6 +240,7 @@ pub fn build_normal_keymap() -> Keymap {
         "cursor.move_down",
     );
 
+    km.bind(vec![KeyPress::char('D')], "edit.delete_till_eol");
     km.bind(vec![KeyPress::char('x')], "edit.delete_char_forward");
     km.bind(vec![KeyPress::char('u')], "edit.undo");
 
@@ -254,19 +276,13 @@ pub fn build_normal_keymap() -> Keymap {
     km.bind(vec![KeyPress::char('r')], "edit.replace_char");
     km.bind(vec![KeyPress::char('f')], "motion.find_char_forward");
     km.bind(vec![KeyPress::char('F')], "motion.find_char_backward");
-    km.bind(
-        vec![KeyPress::char('t')],
-        "motion.find_char_forward_before",
-    );
+    km.bind(vec![KeyPress::char('t')], "motion.find_char_forward_before");
     km.bind(
         vec![KeyPress::char('T')],
         "motion.find_char_backward_before",
     );
     km.bind(vec![KeyPress::char(';')], "motion.repeat_find_char");
-    km.bind(
-        vec![KeyPress::char(',')],
-        "motion.repeat_find_char_reverse",
-    );
+    km.bind(vec![KeyPress::char(',')], "motion.repeat_find_char_reverse");
 
     km
 }

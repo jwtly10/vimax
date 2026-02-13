@@ -6,8 +6,8 @@ use crate::action::{EditorAction, EditorEffect, Motion, Range};
 use crate::buffer::Buffer;
 use crate::layout::SplitDirection;
 use crate::registers::Registers;
-use crate::syntax::loader::Loader;
 use crate::syntax::SyntaxState;
+use crate::syntax::loader::Loader;
 use crate::vim::mode::VimMode;
 use crate::workspace::Workspace;
 
@@ -115,7 +115,11 @@ impl Editor {
 
     pub fn open_file(&mut self, path: &Path) {
         let path_str = path.to_string_lossy().to_string();
-        if let Some(idx) = self.buffers.iter().position(|b| b.file_path() == Some(&path_str)) {
+        if let Some(idx) = self
+            .buffers
+            .iter()
+            .position(|b| b.file_path() == Some(&path_str))
+        {
             self.workspace_mut().reset_window_for_buffer(idx);
             self.status_message = format!("\"{}\"", path.display());
             return;
@@ -175,8 +179,7 @@ impl Editor {
         }
         let buf_id = self.workspace().window().buffer_id;
         if self.buffers[buf_id].is_modified() {
-            self.status_message =
-                String::from("Unsaved changes! Use :bd! to force close");
+            self.status_message = String::from("Unsaved changes! Use :bd! to force close");
             return;
         }
         self.buffers.remove(buf_id);
@@ -212,6 +215,11 @@ impl Editor {
             EditorAction::InsertTab => {
                 let cursor = self.cursor();
                 let new_cursor = self.buffer_mut().insert_str(cursor, "    ");
+                self.window_mut().cursor = new_cursor;
+            }
+            EditorAction::DeleteTillEndOfLine => {
+                let cursor = self.cursor();
+                let new_cursor = self.buffer_mut().delete_till_eol(cursor);
                 self.window_mut().cursor = new_cursor;
             }
             EditorAction::DeleteCharForward { count } => {
@@ -298,46 +306,41 @@ impl Editor {
                 win.search_cached_pattern.clear();
                 self.status_message.clear();
             }
-            EditorAction::Save => {
-                match self.buffer_mut().save() {
-                    Ok(()) => {
-                        info!("file saved");
-                        self.status_message = String::from("Written");
-                    }
-                    Err(e) => {
-                        error!(?e, "failed to save");
-                        self.status_message = format!("Error: {}", e);
-                    }
+            EditorAction::Save => match self.buffer_mut().save() {
+                Ok(()) => {
+                    info!("file saved");
+                    self.status_message = String::from("Written");
                 }
-            }
+                Err(e) => {
+                    error!(?e, "failed to save");
+                    self.status_message = format!("Error: {}", e);
+                }
+            },
             EditorAction::Quit { force } => {
                 if force {
                     return EditorEffect::Task(iced::exit());
                 }
-                self.status_message = String::from(
-                    "Use :qa! to force quit all, or :wq to save and close",
-                );
+                self.status_message =
+                    String::from("Use :qa! to force quit all, or :wq to save and close");
             }
             EditorAction::ForceQuitApp => {
                 return EditorEffect::Task(iced::exit());
             }
-            EditorAction::WriteQuit => {
-                match self.buffer_mut().save() {
-                    Ok(()) => {
-                        info!("file saved");
-                        let ws = &mut self.workspaces[self.active_workspace];
-                        if ws.layout.leaf_count() > 1 {
-                            ws.close_window();
-                        } else {
-                            return EditorEffect::Task(iced::exit());
-                        }
-                    }
-                    Err(e) => {
-                        error!(?e, "failed to save");
-                        self.status_message = format!("Error: {}", e);
+            EditorAction::WriteQuit => match self.buffer_mut().save() {
+                Ok(()) => {
+                    info!("file saved");
+                    let ws = &mut self.workspaces[self.active_workspace];
+                    if ws.layout.leaf_count() > 1 {
+                        ws.close_window();
+                    } else {
+                        return EditorEffect::Task(iced::exit());
                     }
                 }
-            }
+                Err(e) => {
+                    error!(?e, "failed to save");
+                    self.status_message = format!("Error: {}", e);
+                }
+            },
             EditorAction::OpenFile(path) => {
                 self.open_file(&path);
             }
@@ -369,16 +372,20 @@ impl Editor {
                 }
             }
             EditorAction::FocusLeft => {
-                self.workspace_mut().focus_direction(SplitDirection::Vertical, false);
+                self.workspace_mut()
+                    .focus_direction(SplitDirection::Vertical, false);
             }
             EditorAction::FocusRight => {
-                self.workspace_mut().focus_direction(SplitDirection::Vertical, true);
+                self.workspace_mut()
+                    .focus_direction(SplitDirection::Vertical, true);
             }
             EditorAction::FocusUp => {
-                self.workspace_mut().focus_direction(SplitDirection::Horizontal, false);
+                self.workspace_mut()
+                    .focus_direction(SplitDirection::Horizontal, false);
             }
             EditorAction::FocusDown => {
-                self.workspace_mut().focus_direction(SplitDirection::Horizontal, true);
+                self.workspace_mut()
+                    .focus_direction(SplitDirection::Horizontal, true);
             }
             EditorAction::SetMode(mode) => {
                 self.mode_display = mode;
@@ -450,7 +457,8 @@ impl Editor {
             };
             let yanked = self.buffers[buf_id].yank_range(line_start, line_end);
             if cut {
-                let (new_cursor, _) = self.buffers[buf_id].delete_range(cursor, line_start, line_end);
+                let (new_cursor, _) =
+                    self.buffers[buf_id].delete_range(cursor, line_start, line_end);
                 self.workspace_mut().window_mut().cursor = new_cursor;
             }
             yanked
@@ -489,37 +497,51 @@ impl Editor {
         let new_cursor = match motion {
             Motion::Left => {
                 let mut c = cursor;
-                for _ in 0..count { c = buffer.move_left(c); }
+                for _ in 0..count {
+                    c = buffer.move_left(c);
+                }
                 c
             }
             Motion::Right => {
                 let mut c = cursor;
-                for _ in 0..count { c = buffer.move_right(c); }
+                for _ in 0..count {
+                    c = buffer.move_right(c);
+                }
                 c
             }
             Motion::Up => {
                 let mut c = cursor;
-                for _ in 0..count { c = buffer.move_up(c); }
+                for _ in 0..count {
+                    c = buffer.move_up(c);
+                }
                 c
             }
             Motion::Down => {
                 let mut c = cursor;
-                for _ in 0..count { c = buffer.move_down(c); }
+                for _ in 0..count {
+                    c = buffer.move_down(c);
+                }
                 c
             }
             Motion::WordForward => {
                 let mut c = cursor;
-                for _ in 0..count { c = buffer.move_word_forward(c); }
+                for _ in 0..count {
+                    c = buffer.move_word_forward(c);
+                }
                 c
             }
             Motion::WordBackward => {
                 let mut c = cursor;
-                for _ in 0..count { c = buffer.move_word_backward(c); }
+                for _ in 0..count {
+                    c = buffer.move_word_backward(c);
+                }
                 c
             }
             Motion::WordEnd => {
                 let mut c = cursor;
-                for _ in 0..count { c = buffer.move_word_end(c); }
+                for _ in 0..count {
+                    c = buffer.move_word_end(c);
+                }
                 c
             }
             Motion::LineStart => buffer.move_to_line_start(cursor),
@@ -527,7 +549,11 @@ impl Editor {
             Motion::FirstNonWhitespace => buffer.move_to_first_non_whitespace(cursor),
             Motion::FileStart => buffer.move_to_start(),
             Motion::FileEnd => buffer.move_to_end(),
-            Motion::FindChar { ch, forward, stop_before } => {
+            Motion::FindChar {
+                ch,
+                forward,
+                stop_before,
+            } => {
                 let mut c = cursor;
                 for _ in 0..count {
                     c = buffer.find_char_on_line(c, *ch, *forward, *stop_before);
@@ -537,13 +563,17 @@ impl Editor {
             Motion::HalfPageDown => {
                 let half = (win.visible_lines / 2).max(1) * count;
                 let mut c = cursor;
-                for _ in 0..half { c = buffer.move_down(c); }
+                for _ in 0..half {
+                    c = buffer.move_down(c);
+                }
                 c
             }
             Motion::HalfPageUp => {
                 let half = (win.visible_lines / 2).max(1) * count;
                 let mut c = cursor;
-                for _ in 0..half { c = buffer.move_up(c); }
+                for _ in 0..half {
+                    c = buffer.move_up(c);
+                }
                 c
             }
         };
@@ -566,10 +596,7 @@ impl Editor {
         let mut cursor = win.cursor;
         let matches = &win.search_matches;
         for _ in 0..count {
-            let next = matches
-                .iter()
-                .find(|&&m| m > cursor)
-                .or(matches.first());
+            let next = matches.iter().find(|&&m| m > cursor).or(matches.first());
             if let Some(&pos) = next {
                 cursor = pos;
             }
@@ -588,7 +615,10 @@ impl Editor {
         } else {
             ""
         };
-        self.status_message = format!("/{} [{}/{}]{}", self.search_pattern, current, total, wrapped);
+        self.status_message = format!(
+            "/{} [{}/{}]{}",
+            self.search_pattern, current, total, wrapped
+        );
     }
 
     fn search_prev(&mut self, count: usize) {
@@ -629,6 +659,9 @@ impl Editor {
         } else {
             ""
         };
-        self.status_message = format!("?{} [{}/{}]{}", self.search_pattern, current, total, wrapped);
+        self.status_message = format!(
+            "?{} [{}/{}]{}",
+            self.search_pattern, current, total, wrapped
+        );
     }
 }
