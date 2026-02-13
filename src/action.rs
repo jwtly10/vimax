@@ -4,6 +4,11 @@ use crate::app::Message;
 use crate::vim::mode::VimMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerKind {
+    Buffers,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Motion {
     Left,
     Right,
@@ -78,6 +83,7 @@ pub enum EditorAction {
     SystemCut,
     SystemPaste,
     ForceQuitApp,
+    OpenPicker(PickerKind),
 }
 
 pub enum EditorEffect {

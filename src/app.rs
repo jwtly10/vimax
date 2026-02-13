@@ -1,7 +1,8 @@
-use crate::action::EditorEffect;
+use crate::action::{EditorEffect, PickerKind};
 use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::layout::{LayoutNode, SplitDirection};
+use crate::picker::{Picker, PickerItem};
 use crate::text_grid;
 use crate::vim::VimLayer;
 
@@ -16,6 +17,8 @@ const SCROLL_SPEED: f32 = 0.5;
 pub struct Remax {
     editor: Editor,
     vim: VimLayer,
+    picker: Option<Picker>,
+    picker_restore_buffer: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +79,8 @@ impl Remax {
             Self {
                 editor: Editor::new(buffer, cwd),
                 vim: VimLayer::new(),
+                picker: None,
+                picker_restore_buffer: None,
             },
             Task::none(),
         )
@@ -120,6 +125,11 @@ impl Remax {
                 modifiers,
                 text,
             } => {
+                // Picker intercepts all keys when active
+                if self.picker.is_some() {
+                    return self.handle_picker_key(&key, &modifiers, text.as_deref());
+                }
+
                 debug!(
                     mode = %self.vim.mode(),
                     ?key,
@@ -132,18 +142,30 @@ impl Remax {
                 let actions = {
                     let buffer = self.editor.buffer();
                     let cursor = self.editor.cursor();
-                    self.vim
-                        .handle_key(&key, &modified_key, &modifiers, text.as_deref(), buffer, cursor)
+                    self.vim.handle_key(
+                        &key,
+                        &modified_key,
+                        &modifiers,
+                        text.as_deref(),
+                        buffer,
+                        cursor,
+                    )
                 };
 
                 for action in actions {
-                    match self.editor.execute(action) {
-                        EditorEffect::Task(t) => {
-                            self.editor.update_search_cache();
-                            self.editor.ensure_cursor_visible();
-                            return t;
+                    match action {
+                        crate::action::EditorAction::OpenPicker(kind) => {
+                            self.open_picker(kind);
+                            return Task::none();
                         }
-                        EditorEffect::None => {}
+                        action => match self.editor.execute(action) {
+                            EditorEffect::Task(t) => {
+                                self.editor.update_search_cache();
+                                self.editor.ensure_cursor_visible();
+                                return t;
+                            }
+                            EditorEffect::None => {}
+                        },
                     }
                 }
                 self.editor.update_search_cache();
@@ -165,8 +187,8 @@ impl Remax {
                     let scroll_delta = new_scroll as isize - old_scroll as isize;
                     if scroll_delta != 0 {
                         let new_line = (cur_line as isize + scroll_delta).max(0) as usize;
-                        let new_cursor = self.editor.buffers[buf_id]
-                            .cursor_from_position(new_line, cur_col);
+                        let new_cursor =
+                            self.editor.buffers[buf_id].cursor_from_position(new_line, cur_col);
                         self.editor.workspace_mut().windows[window_id].cursor = new_cursor;
                     }
                 }
@@ -176,8 +198,11 @@ impl Remax {
                 if window_id < ws.windows.len() {
                     let buf_id = ws.windows[window_id].buffer_id;
                     let max_len = self.editor.buffers[buf_id].max_line_len();
-                    self.editor.workspace_mut().windows[window_id]
-                        .scroll_cols(delta, SCROLL_SPEED, max_len);
+                    self.editor.workspace_mut().windows[window_id].scroll_cols(
+                        delta,
+                        SCROLL_SPEED,
+                        max_len,
+                    );
                 }
             }
             Message::MouseClick { x, y, window_id } => {
@@ -263,20 +288,63 @@ impl Remax {
         .width(Length::Fill)
         .padding([2, 0]);
 
-        let cmdline_text = self
-            .vim
-            .status_line_override()
-            .unwrap_or_else(|| self.editor.status_message.clone());
+        let bottom_section: Element<'_, Message> = if let Some(picker) = &self.picker {
+            let prompt = container(
+                text(format!(" {}", picker.status_line()))
+                    .size(14)
+                    .color(iced::Color::from_rgb(0.9, 0.9, 0.5)),
+            )
+            .width(Length::Fill)
+            .padding([2, 0]);
 
-        let cmdline = container(
-            text(format!(" {}", cmdline_text))
-                .size(14)
-                .color(iced::Color::from_rgb(0.8, 0.8, 0.8)),
-        )
-        .width(Length::Fill)
-        .padding([2, 0]);
+            let mut items_col = column![];
+            for (i, &item_idx) in picker.filtered.iter().enumerate() {
+                let item = &picker.items[item_idx];
+                let is_selected = i == picker.selected;
+                let label = if is_selected {
+                    format!(" > {}", item.label)
+                } else {
+                    format!("   {}", item.label)
+                };
+                let text_color = if is_selected {
+                    iced::Color::from_rgb(1.0, 1.0, 1.0)
+                } else {
+                    iced::Color::from_rgb(0.6, 0.6, 0.6)
+                };
+                let row_widget = container(text(label).size(14).color(text_color))
+                    .width(Length::Fill)
+                    .padding([1, 3]);
+                let row_widget = if is_selected {
+                    row_widget.style(|_theme: &Theme| container::Style {
+                        background: Some(iced::Background::Color(iced::Color::from_rgb(
+                            0.25, 0.35, 0.5,
+                        ))),
+                        ..Default::default()
+                    })
+                } else {
+                    row_widget
+                };
+                items_col = items_col.push(row_widget);
+            }
 
-        let content = column![editor_area, modeline, cmdline];
+            column![prompt, items_col].into()
+        } else {
+            let cmdline_text = self
+                .vim
+                .status_line_override()
+                .unwrap_or_else(|| self.editor.status_message.clone());
+
+            container(
+                text(format!(" {}", cmdline_text))
+                    .size(14)
+                    .color(iced::Color::from_rgb(0.8, 0.8, 0.8)),
+            )
+            .width(Length::Fill)
+            .padding([2, 0])
+            .into()
+        };
+
+        let content = column![editor_area, modeline, bottom_section];
 
         container(content)
             .width(Length::Fill)
@@ -288,6 +356,97 @@ impl Remax {
                 ..Default::default()
             })
             .into()
+    }
+
+    fn open_picker(&mut self, kind: PickerKind) {
+        match kind {
+            PickerKind::Buffers => {
+                let buf_list = self.editor.buffer_list();
+                let items: Vec<PickerItem> = buf_list
+                    .into_iter()
+                    .map(|(id, label)| PickerItem { id, label })
+                    .collect();
+                self.picker_restore_buffer = Some(self.editor.workspace().window().buffer_id);
+                self.picker = Some(Picker::new("Buffers", items));
+            }
+        }
+    }
+
+    // TODO: only for some picker implementations do we want to preview
+    // things like rg cwd search - we don't
+    fn preview_selected_buffer(&mut self) {
+        if let Some(picker) = &self.picker
+            && let Some(item) = picker.selected_item()
+        {
+            let buf_id = item.id;
+            let len_chars = self.editor.buffers[buf_id].len_chars();
+            self.editor.workspace_mut().switch_buffer(buf_id, len_chars);
+        }
+    }
+
+    fn handle_picker_key(
+        &mut self,
+        key: &keyboard::Key,
+        modifiers: &keyboard::Modifiers,
+        text: Option<&str>,
+    ) -> Task<Message> {
+        match key {
+            keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                if let Some(buf_id) = self.picker_restore_buffer.take() {
+                    let len_chars = self.editor.buffers[buf_id].len_chars();
+                    self.editor.workspace_mut().switch_buffer(buf_id, len_chars);
+                }
+                self.picker = None;
+            }
+            keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                self.picker = None;
+                self.picker_restore_buffer = None;
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                if let Some(picker) = &mut self.picker {
+                    picker.move_up();
+                }
+                self.preview_selected_buffer();
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                if let Some(picker) = &mut self.picker {
+                    picker.move_down();
+                }
+                self.preview_selected_buffer();
+            }
+            keyboard::Key::Character(c) if modifiers.control() && c.as_str() == "p" => {
+                if let Some(picker) = &mut self.picker {
+                    picker.move_up();
+                }
+                self.preview_selected_buffer();
+            }
+            keyboard::Key::Character(c) if modifiers.control() && c.as_str() == "n" => {
+                if let Some(picker) = &mut self.picker {
+                    picker.move_down();
+                }
+                self.preview_selected_buffer();
+            }
+            keyboard::Key::Named(keyboard::key::Named::Backspace) => {
+                if let Some(picker) = &mut self.picker {
+                    picker.backspace();
+                }
+                self.preview_selected_buffer();
+            }
+            _ => {
+                // Type character into picker query
+                if let Some(t) = text {
+                    if let Some(picker) = &mut self.picker {
+                        for ch in t.chars() {
+                            if !ch.is_control() {
+                                picker.type_char(ch);
+                            }
+                        }
+                    }
+                    self.preview_selected_buffer();
+                }
+            }
+        }
+        Task::none()
     }
 
     fn build_layout_view<'a>(
@@ -306,8 +465,7 @@ impl Remax {
                     if let Some(Some(state)) = self.editor.syntax_states.get(win.buffer_id) {
                         let rope = buffer.rope();
                         let start_byte = rope.line_to_byte(win.scroll_y) as u32;
-                        let end_line = (win.scroll_y + win.visible_lines + 2)
-                            .min(rope.len_lines());
+                        let end_line = (win.scroll_y + win.visible_lines + 2).min(rope.len_lines());
                         let end_byte = if end_line < rope.len_lines() {
                             rope.line_to_byte(end_line) as u32
                         } else {

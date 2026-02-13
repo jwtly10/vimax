@@ -430,6 +430,9 @@ impl Editor {
             EditorAction::SystemPaste => {
                 self.system_paste();
             }
+            EditorAction::OpenPicker(_) => {
+                // Handled by app layer, not editor
+            }
         }
         EditorEffect::None
     }
@@ -481,6 +484,17 @@ impl Editor {
         let cursor = self.cursor();
         let new_cursor = self.buffer_mut().insert_str(cursor, &text);
         self.window_mut().cursor = new_cursor;
+    }
+
+    pub fn buffer_list(&self) -> Vec<(usize, String)> {
+        self.buffers
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let modified = if b.is_modified() { " [+]" } else { "" };
+                (i, format!("{}{}", b.name(), modified))
+            })
+            .collect()
     }
 
     pub fn has_unsaved_changes(&self) -> bool {

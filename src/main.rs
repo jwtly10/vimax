@@ -3,6 +3,7 @@ mod app;
 mod buffer;
 mod editor;
 mod layout;
+mod picker;
 mod registers;
 mod syntax;
 mod text_grid;

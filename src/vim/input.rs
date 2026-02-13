@@ -1,7 +1,7 @@
 use iced::keyboard;
 use tracing::{debug, info};
 
-use crate::action::{EditorAction, Motion, Range};
+use crate::action::{EditorAction, Motion, PickerKind, Range};
 use crate::buffer::Buffer;
 
 use super::commands;
@@ -971,6 +971,7 @@ impl InputState {
             "bn" | "bnext" => vec![EditorAction::NextBuffer],
             "bp" | "bprev" | "bprevious" => vec![EditorAction::PrevBuffer],
             "bd" | "bdelete" => vec![EditorAction::CloseBuffer],
+            "buffers" | "ls" => vec![EditorAction::OpenPicker(PickerKind::Buffers)],
             "vs" | "vsplit" => vec![EditorAction::VSplit],
             "sp" | "split" => vec![EditorAction::HSplit],
             "close" => vec![EditorAction::CloseWindow],
