@@ -367,6 +367,9 @@ impl Remax {
                     .collect();
                 self.picker_restore_buffer = Some(self.editor.workspace().window().buffer_id);
                 self.picker = Some(Picker::new("Buffers", items));
+                if !self.picker.as_ref().unwrap().items.is_empty() {
+                    self.preview_selected_buffer();
+                }
             }
         }
     }
