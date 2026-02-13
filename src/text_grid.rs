@@ -143,6 +143,10 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
         viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
+
+        // Clip all rendering to this widget's bounds so text doesn't bleed into adjacent splits
+        renderer.with_layer(bounds, |renderer| {
+
         let rope = self.buffer.rope();
         let (cursor_line, cursor_col) = self.buffer.cursor_position(self.cursor);
 
@@ -435,6 +439,8 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                 }
             }
         }
+
+        }); // end with_layer clip
     }
 }
 
