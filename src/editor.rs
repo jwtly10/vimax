@@ -535,13 +535,13 @@ impl Editor {
                 c
             }
             Motion::HalfPageDown => {
-                let half = (win.viewport.visible_lines / 2).max(1) * count;
+                let half = (win.visible_lines / 2).max(1) * count;
                 let mut c = cursor;
                 for _ in 0..half { c = buffer.move_down(c); }
                 c
             }
             Motion::HalfPageUp => {
-                let half = (win.viewport.visible_lines / 2).max(1) * count;
+                let half = (win.visible_lines / 2).max(1) * count;
                 let mut c = cursor;
                 for _ in 0..half { c = buffer.move_up(c); }
                 c

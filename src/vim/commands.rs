@@ -1,4 +1,5 @@
-use crate::action::{BufferQuery, EditorAction, Motion};
+use crate::action::{EditorAction, Motion};
+use crate::buffer::Buffer;
 
 use super::input::InputState;
 
@@ -6,7 +7,8 @@ pub fn resolve(
     id: &str,
     count: usize,
     input: &mut InputState,
-    buf: &dyn BufferQuery,
+    buffer: &Buffer,
+    cursor: usize,
 ) -> Vec<EditorAction> {
     match id {
         "cursor.move_left" => vec![EditorAction::MoveCursor {
@@ -95,11 +97,11 @@ pub fn resolve(
             vec![]
         }
         "vim.enter_visual" => {
-            input.enter_visual(buf);
+            input.enter_visual(cursor);
             vec![]
         }
         "vim.enter_visual_line" => {
-            input.enter_visual_line(buf);
+            input.enter_visual_line(cursor);
             vec![]
         }
         "vim.exit_visual" => input.exit_visual(),
@@ -114,9 +116,9 @@ pub fn resolve(
 
         "op.delete" | "op.change" | "op.yank" => vec![],
 
-        "visual.delete" => input.visual_delete(buf),
-        "visual.yank" => input.visual_yank(buf),
-        "visual.change" => input.visual_change(buf),
+        "visual.delete" => input.visual_delete(buffer, cursor),
+        "visual.yank" => input.visual_yank(buffer, cursor),
+        "visual.change" => input.visual_change(buffer, cursor),
 
         "motion.find_char_forward" => {
             input.pending_find_char = Some((true, false));

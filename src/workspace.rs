@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use crate::layout::{LayoutNode, SplitDirection};
-use crate::viewport::Viewport;
 use crate::window::Window;
 
 pub struct Workspace {
@@ -45,7 +44,8 @@ impl Workspace {
         win.buffer_id = buffer_id;
         win.cursor = 0;
         win.selection = None;
-        win.viewport = Viewport::new();
+        win.scroll_y = 0;
+        win.scroll_x = 0;
     }
 
     pub fn split(&mut self, direction: SplitDirection) {

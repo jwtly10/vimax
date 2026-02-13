@@ -4,7 +4,6 @@ use crate::editor::Editor;
 use crate::layout::{LayoutNode, SplitDirection};
 use crate::text_grid;
 use crate::vim::VimLayer;
-use crate::window::WindowView;
 
 use iced::keyboard;
 use iced::widget::Space;
@@ -131,12 +130,10 @@ impl Remax {
                 );
 
                 let actions = {
-                    let view = WindowView {
-                        buffer: self.editor.buffer(),
-                        cursor: self.editor.cursor(),
-                    };
+                    let buffer = self.editor.buffer();
+                    let cursor = self.editor.cursor();
                     self.vim
-                        .handle_key(&key, &modified_key, &modifiers, text.as_deref(), &view)
+                        .handle_key(&key, &modified_key, &modifiers, text.as_deref(), buffer, cursor)
                 };
 
                 for action in actions {
@@ -157,16 +154,14 @@ impl Remax {
                 let ws = self.editor.workspace_mut();
                 if window_id < ws.windows.len() {
                     let buf_id = ws.windows[window_id].buffer_id;
-                    let old_scroll = ws.windows[window_id].viewport.scroll_y;
+                    let old_scroll = ws.windows[window_id].scroll_y;
                     let cursor = ws.windows[window_id].cursor;
                     let total = self.editor.buffers[buf_id].total_lines();
                     let (cur_line, cur_col) = self.editor.buffers[buf_id].cursor_position(cursor);
 
                     let ws = self.editor.workspace_mut();
-                    ws.windows[window_id]
-                        .viewport
-                        .scroll_lines(delta, SCROLL_SPEED, total);
-                    let new_scroll = ws.windows[window_id].viewport.scroll_y;
+                    ws.windows[window_id].scroll_lines(delta, SCROLL_SPEED, total);
+                    let new_scroll = ws.windows[window_id].scroll_y;
                     let scroll_delta = new_scroll as isize - old_scroll as isize;
                     if scroll_delta != 0 {
                         let new_line = (cur_line as isize + scroll_delta).max(0) as usize;
@@ -182,7 +177,6 @@ impl Remax {
                     let buf_id = ws.windows[window_id].buffer_id;
                     let max_len = self.editor.buffers[buf_id].max_line_len();
                     self.editor.workspace_mut().windows[window_id]
-                        .viewport
                         .scroll_cols(delta, SCROLL_SPEED, max_len);
                 }
             }
@@ -191,8 +185,8 @@ impl Remax {
                 ws.active_window = window_id;
                 if window_id < ws.windows.len() {
                     let win = &ws.windows[window_id];
-                    let line = win.viewport.scroll_y + (y / text_grid::LINE_HEIGHT) as usize;
-                    let col = win.viewport.scroll_x
+                    let line = win.scroll_y + (y / text_grid::LINE_HEIGHT) as usize;
+                    let col = win.scroll_x
                         + ((x - text_grid::GUTTER_WIDTH - 8.0).max(0.0) / text_grid::CHAR_WIDTH)
                             as usize;
                     let buf_id = win.buffer_id;
@@ -211,10 +205,9 @@ impl Remax {
                     let ws = self.editor.workspace_mut();
                     if window_id < ws.windows.len() {
                         let win = &mut ws.windows[window_id];
-                        if win.viewport.visible_lines != lines || win.viewport.visible_cols != cols
-                        {
-                            win.viewport.visible_lines = lines;
-                            win.viewport.visible_cols = cols;
+                        if win.visible_lines != lines || win.visible_cols != cols {
+                            win.visible_lines = lines;
+                            win.visible_cols = cols;
                             resized = true;
                         }
                     }
@@ -312,8 +305,8 @@ impl Remax {
                 let highlights =
                     if let Some(Some(state)) = self.editor.syntax_states.get(win.buffer_id) {
                         let rope = buffer.rope();
-                        let start_byte = rope.line_to_byte(win.viewport.scroll_y) as u32;
-                        let end_line = (win.viewport.scroll_y + win.viewport.visible_lines + 2)
+                        let start_byte = rope.line_to_byte(win.scroll_y) as u32;
+                        let end_line = (win.scroll_y + win.visible_lines + 2)
                             .min(rope.len_lines());
                         let end_byte = if end_line < rope.len_lines() {
                             rope.line_to_byte(end_line) as u32
@@ -328,8 +321,8 @@ impl Remax {
                 let grid = text_grid::text_grid(
                     buffer,
                     win.cursor,
-                    win.viewport.scroll_y,
-                    win.viewport.scroll_x,
+                    win.scroll_y,
+                    win.scroll_x,
                     win.selection,
                     &win.search_matches,
                     if is_active {

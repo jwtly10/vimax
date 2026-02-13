@@ -3,7 +3,8 @@ pub mod input;
 pub mod keymap;
 pub mod mode;
 
-use crate::action::{BufferQuery, EditorAction};
+use crate::action::EditorAction;
+use crate::buffer::Buffer;
 
 use self::input::InputState;
 use self::keymap::Keymaps;
@@ -30,7 +31,8 @@ impl VimLayer {
         modified_key: &keyboard::Key,
         modifiers: &keyboard::Modifiers,
         text: Option<&str>,
-        buf: &dyn BufferQuery,
+        buffer: &Buffer,
+        cursor: usize,
     ) -> Vec<EditorAction> {
         let mode = self.input.mode;
         let global = self.keymaps.global();
@@ -38,7 +40,7 @@ impl VimLayer {
 
         let actions =
             self.input
-                .handle_key(key, modified_key, modifiers, text, global, mode_keymap, buf);
+                .handle_key(key, modified_key, modifiers, text, global, mode_keymap, buffer, cursor);
 
         if matches!(self.input.mode, VimMode::Visual | VimMode::VisualLine)
             && !actions.iter().any(|a| matches!(a, EditorAction::SetSelection(_)))

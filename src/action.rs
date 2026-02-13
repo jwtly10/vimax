@@ -83,17 +83,3 @@ pub enum EditorEffect {
     None,
     Task(Task<Message>),
 }
-
-pub trait BufferQuery {
-    fn cursor(&self) -> usize;
-    fn cursor_position(&self) -> (usize, usize);
-    fn len_chars(&self) -> usize;
-    fn total_lines(&self) -> usize;
-    fn line_to_char(&self, line: usize) -> usize;
-    fn char_to_line(&self, pos: usize) -> usize;
-    fn text_object_inner_word(&self) -> (usize, usize);
-    fn text_object_a_word(&self) -> (usize, usize);
-    fn text_object_delimited(&self, open: char, close: char, include: bool) -> (usize, usize);
-    fn text_object_quoted(&self, quote: char, include: bool) -> (usize, usize);
-    fn cursor_after_motion(&self, motion: &Motion, count: usize) -> usize;
-}

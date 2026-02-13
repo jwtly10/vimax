@@ -1,7 +1,8 @@
 use iced::keyboard;
 use tracing::{debug, info};
 
-use crate::action::{BufferQuery, EditorAction, Motion, Range};
+use crate::action::{EditorAction, Motion, Range};
+use crate::buffer::Buffer;
 
 use super::commands;
 use super::keymap::{CommandId, KeyId, KeyPress, Keymap, KeymapLookup};
@@ -65,22 +66,22 @@ fn parse_text_object(modifier: char, obj: char) -> Option<TextObject> {
     }
 }
 
-fn resolve_text_object(buf: &dyn BufferQuery, obj: TextObject) -> (usize, usize) {
+fn resolve_text_object(buffer: &Buffer, cursor: usize, obj: TextObject) -> (usize, usize) {
     match obj {
-        TextObject::InnerWord => buf.text_object_inner_word(),
-        TextObject::AWord => buf.text_object_a_word(),
-        TextObject::InnerParen => buf.text_object_delimited('(', ')', false),
-        TextObject::AParen => buf.text_object_delimited('(', ')', true),
-        TextObject::InnerCurly => buf.text_object_delimited('{', '}', false),
-        TextObject::ACurly => buf.text_object_delimited('{', '}', true),
-        TextObject::InnerBracket => buf.text_object_delimited('[', ']', false),
-        TextObject::ABracket => buf.text_object_delimited('[', ']', true),
-        TextObject::InnerAngle => buf.text_object_delimited('<', '>', false),
-        TextObject::AAngle => buf.text_object_delimited('<', '>', true),
-        TextObject::InnerSingleQuote => buf.text_object_quoted('\'', false),
-        TextObject::ASingleQuote => buf.text_object_quoted('\'', true),
-        TextObject::InnerDoubleQuote => buf.text_object_quoted('"', false),
-        TextObject::ADoubleQuote => buf.text_object_quoted('"', true),
+        TextObject::InnerWord => buffer.text_object_inner_word(cursor),
+        TextObject::AWord => buffer.text_object_a_word(cursor),
+        TextObject::InnerParen => buffer.text_object_delimited(cursor, '(', ')', false),
+        TextObject::AParen => buffer.text_object_delimited(cursor, '(', ')', true),
+        TextObject::InnerCurly => buffer.text_object_delimited(cursor, '{', '}', false),
+        TextObject::ACurly => buffer.text_object_delimited(cursor, '{', '}', true),
+        TextObject::InnerBracket => buffer.text_object_delimited(cursor, '[', ']', false),
+        TextObject::ABracket => buffer.text_object_delimited(cursor, '[', ']', true),
+        TextObject::InnerAngle => buffer.text_object_delimited(cursor, '<', '>', false),
+        TextObject::AAngle => buffer.text_object_delimited(cursor, '<', '>', true),
+        TextObject::InnerSingleQuote => buffer.text_object_quoted(cursor, '\'', false),
+        TextObject::ASingleQuote => buffer.text_object_quoted(cursor, '\'', true),
+        TextObject::InnerDoubleQuote => buffer.text_object_quoted(cursor, '"', false),
+        TextObject::ADoubleQuote => buffer.text_object_quoted(cursor, '"', true),
     }
 }
 
@@ -215,13 +216,13 @@ impl InputState {
         self.mode = VimMode::Search;
     }
 
-    pub fn enter_visual(&mut self, buf: &dyn BufferQuery) {
+    pub fn enter_visual(&mut self, cursor: usize) {
         info!("entering visual mode");
-        self.selection_anchor = Some(buf.cursor());
+        self.selection_anchor = Some(cursor);
         self.mode = VimMode::Visual;
     }
 
-    pub fn enter_visual_line(&mut self, buf: &dyn BufferQuery) {
+    pub fn enter_visual_line(&mut self, cursor: usize) {
         info!("entering visual line mode");
         if self.mode == VimMode::Visual {
             self.mode = VimMode::VisualLine;
@@ -229,7 +230,7 @@ impl InputState {
             self.selection_anchor = None;
             self.mode = VimMode::Normal;
         } else {
-            self.selection_anchor = Some(buf.cursor());
+            self.selection_anchor = Some(cursor);
             self.mode = VimMode::VisualLine;
         }
     }
@@ -244,9 +245,9 @@ impl InputState {
         ]
     }
 
-    pub fn visual_delete(&mut self, buf: &dyn BufferQuery) -> Vec<EditorAction> {
+    pub fn visual_delete(&mut self, buffer: &Buffer, cursor: usize) -> Vec<EditorAction> {
         let mut actions = Vec::new();
-        if let Some((start, end)) = self.compute_selection(buf) {
+        if let Some((start, end)) = self.compute_selection(buffer, cursor) {
             actions.push(EditorAction::DeleteRange(Range { start, end }));
         }
         self.selection_anchor = None;
@@ -256,9 +257,9 @@ impl InputState {
         actions
     }
 
-    pub fn visual_yank(&mut self, buf: &dyn BufferQuery) -> Vec<EditorAction> {
+    pub fn visual_yank(&mut self, buffer: &Buffer, cursor: usize) -> Vec<EditorAction> {
         let mut actions = Vec::new();
-        if let Some((start, end)) = self.compute_selection(buf) {
+        if let Some((start, end)) = self.compute_selection(buffer, cursor) {
             actions.push(EditorAction::YankRange(Range { start, end }));
         }
         self.selection_anchor = None;
@@ -268,9 +269,9 @@ impl InputState {
         actions
     }
 
-    pub fn visual_change(&mut self, buf: &dyn BufferQuery) -> Vec<EditorAction> {
+    pub fn visual_change(&mut self, buffer: &Buffer, cursor: usize) -> Vec<EditorAction> {
         let mut actions = Vec::new();
-        if let Some((start, end)) = self.compute_selection(buf) {
+        if let Some((start, end)) = self.compute_selection(buffer, cursor) {
             actions.push(EditorAction::ChangeRange(Range { start, end }));
         }
         self.selection_anchor = None;
@@ -282,24 +283,24 @@ impl InputState {
 
     pub fn compute_selection(
         &self,
-        buf: &dyn BufferQuery,
+        buffer: &Buffer,
+        cursor: usize,
     ) -> Option<(usize, usize)> {
         let anchor = self.selection_anchor?;
-        let cursor = buf.cursor();
 
         if self.mode == VimMode::VisualLine {
-            let anchor_line = buf.char_to_line(anchor);
-            let cursor_line = buf.char_to_line(cursor);
+            let anchor_line = buffer.char_to_line(anchor);
+            let cursor_line = buffer.char_to_line(cursor);
             let (start_line, end_line) = if anchor_line <= cursor_line {
                 (anchor_line, cursor_line)
             } else {
                 (cursor_line, anchor_line)
             };
-            let start = buf.line_to_char(start_line);
-            let end = if end_line + 1 < buf.total_lines() {
-                buf.line_to_char(end_line + 1)
+            let start = buffer.line_to_char(start_line);
+            let end = if end_line + 1 < buffer.total_lines() {
+                buffer.line_to_char(end_line + 1)
             } else {
-                buf.len_chars()
+                buffer.len_chars()
             };
             Some((start, end))
         } else if anchor <= cursor {
@@ -335,7 +336,8 @@ impl InputState {
         text: Option<&str>,
         global_keymap: &Keymap,
         mode_keymap: &Keymap,
-        buf: &dyn BufferQuery,
+        buffer: &Buffer,
+        cursor: usize,
     ) -> Vec<EditorAction> {
         if is_bare_modifier(key) {
             return vec![];
@@ -351,7 +353,7 @@ impl InputState {
                         self.pending_global_keys.clear();
                         let count = self.count_accum.unwrap_or(1);
                         self.count_accum = None;
-                        return commands::resolve(cmd, count, self, buf);
+                        return commands::resolve(cmd, count, self, buffer, cursor);
                     }
                     KeymapLookup::Pending => return vec![],
                     KeymapLookup::NoMatch => {
@@ -368,7 +370,7 @@ impl InputState {
                 KeymapLookup::Match(cmd) => {
                     let count = self.count_accum.unwrap_or(1);
                     self.count_accum = None;
-                    return commands::resolve(cmd, count, self, buf);
+                    return commands::resolve(cmd, count, self, buffer, cursor);
                 }
                 KeymapLookup::Pending => {
                     self.pending_global_keys.push(kp);
@@ -379,11 +381,11 @@ impl InputState {
         }
 
         match self.mode {
-            VimMode::Normal => self.handle_normal(modified_key, mode_keymap, buf),
+            VimMode::Normal => self.handle_normal(modified_key, mode_keymap, buffer, cursor),
             VimMode::Visual | VimMode::VisualLine => {
-                self.handle_visual(modified_key, mode_keymap, buf)
+                self.handle_visual(modified_key, mode_keymap, buffer, cursor)
             }
-            VimMode::Insert => self.handle_insert(key, modifiers, mode_keymap, buf, text),
+            VimMode::Insert => self.handle_insert(key, modifiers, mode_keymap, buffer, cursor, text),
             VimMode::Command => self.handle_command(key, text),
             VimMode::Search => self.handle_search(key, text),
         }
@@ -393,7 +395,8 @@ impl InputState {
         &mut self,
         key: &keyboard::Key,
         keymap: &Keymap,
-        buf: &dyn BufferQuery,
+        buffer: &Buffer,
+        cursor: usize,
     ) -> Vec<EditorAction> {
         if is_bare_modifier(key) {
             return vec![];
@@ -427,7 +430,7 @@ impl InputState {
         }
 
         if self.pending_operator.is_some() {
-            return self.handle_operator_pending(key, keymap, buf);
+            return self.handle_operator_pending(key, keymap, buffer, cursor);
         }
 
         if let keyboard::Key::Character(c) = key {
@@ -461,7 +464,7 @@ impl InputState {
                         return vec![];
                     }
 
-                    commands::resolve(cmd, count, self, buf)
+                    commands::resolve(cmd, count, self, buffer, cursor)
                 }
                 KeymapLookup::Pending => vec![],
                 KeymapLookup::NoMatch => {
@@ -482,7 +485,8 @@ impl InputState {
         &mut self,
         key: &keyboard::Key,
         keymap: &Keymap,
-        buf: &dyn BufferQuery,
+        buffer: &Buffer,
+        cursor: usize,
     ) -> Vec<EditorAction> {
         let operator = self.pending_operator.unwrap();
 
@@ -497,7 +501,7 @@ impl InputState {
                 self.count_accum = None;
 
                 return self.resolve_operator_with_find_char(
-                    operator, ch, forward, stop_before, count, buf,
+                    operator, ch, forward, stop_before, count, buffer, cursor,
                 );
             }
             self.pending_operator = None;
@@ -518,7 +522,7 @@ impl InputState {
                 self.pending_operator = None;
                 self.pending_keys.clear();
                 self.count_accum = None;
-                return self.resolve_operator_whole_line(operator, count, buf);
+                return self.resolve_operator_whole_line(operator, count, buffer, cursor);
             }
         }
 
@@ -541,7 +545,7 @@ impl InputState {
                         self.pending_operator = None;
                         self.pending_keys.clear();
                         self.count_accum = None;
-                        return self.resolve_operator_text_object(operator, obj, count, buf);
+                        return self.resolve_operator_text_object(operator, obj, count, buffer, cursor);
                     }
                     self.pending_keys.clear();
                     self.pending_keys.push(second);
@@ -580,7 +584,7 @@ impl InputState {
                     }
 
                     let op = self.pending_operator.take().unwrap();
-                    self.resolve_operator_motion(op, cmd, count, buf)
+                    self.resolve_operator_motion(op, cmd, count, buffer, cursor)
                 }
                 KeymapLookup::Pending => vec![],
                 KeymapLookup::NoMatch => {
@@ -607,10 +611,9 @@ impl InputState {
         operator: Operator,
         motion_cmd: CommandId,
         count: usize,
-        buf: &dyn BufferQuery,
+        buffer: &Buffer,
+        cursor: usize,
     ) -> Vec<EditorAction> {
-        // Vim motions are either inclusive (destination char is part of the
-        // operated range) or exclusive (destination char is not).
         let (motion, inclusive) = match motion_cmd {
             "cursor.move_left" => (Motion::Left, false),
             "cursor.move_right" => (Motion::Right, false),
@@ -649,12 +652,11 @@ impl InputState {
             _ => return vec![],
         };
 
-        let before = buf.cursor();
-        let after = buf.cursor_after_motion(&motion, count);
-        let (start, end) = if before <= after {
-            (before, if inclusive { after + 1 } else { after })
+        let after = buffer.cursor_after_motion(cursor, &motion, count);
+        let (start, end) = if cursor <= after {
+            (cursor, if inclusive { after + 1 } else { after })
         } else {
-            (after, before + 1)
+            (after, cursor + 1)
         };
 
         if start >= end {
@@ -668,15 +670,16 @@ impl InputState {
         &mut self,
         operator: Operator,
         count: usize,
-        buf: &dyn BufferQuery,
+        buffer: &Buffer,
+        cursor: usize,
     ) -> Vec<EditorAction> {
-        let (line, _) = buf.cursor_position();
-        let line_start = buf.line_to_char(line);
-        let target_line = (line + count).min(buf.total_lines());
-        let line_end = if target_line < buf.total_lines() {
-            buf.line_to_char(target_line)
+        let (line, _) = buffer.cursor_position(cursor);
+        let line_start = buffer.line_to_char(line);
+        let target_line = (line + count).min(buffer.total_lines());
+        let line_end = if target_line < buffer.total_lines() {
+            buffer.line_to_char(target_line)
         } else {
-            buf.len_chars()
+            buffer.len_chars()
         };
 
         if line_start == line_end {
@@ -691,9 +694,10 @@ impl InputState {
         operator: Operator,
         obj: TextObject,
         _count: usize,
-        buf: &dyn BufferQuery,
+        buffer: &Buffer,
+        cursor: usize,
     ) -> Vec<EditorAction> {
-        let (start, end) = resolve_text_object(buf, obj);
+        let (start, end) = resolve_text_object(buffer, cursor, obj);
         if start == end {
             return vec![];
         }
@@ -707,19 +711,19 @@ impl InputState {
         forward: bool,
         stop_before: bool,
         count: usize,
-        buf: &dyn BufferQuery,
+        buffer: &Buffer,
+        cursor: usize,
     ) -> Vec<EditorAction> {
         let motion = Motion::FindChar {
             ch,
             forward,
             stop_before,
         };
-        let before = buf.cursor();
-        let after = buf.cursor_after_motion(&motion, count);
-        let (start, end) = if before <= after {
-            (before, after + 1)
+        let after = buffer.cursor_after_motion(cursor, &motion, count);
+        let (start, end) = if cursor <= after {
+            (cursor, after + 1)
         } else {
-            (after, before)
+            (after, cursor)
         };
 
         if start == end {
@@ -754,7 +758,8 @@ impl InputState {
         key: &keyboard::Key,
         modifiers: &keyboard::Modifiers,
         keymap: &Keymap,
-        buf: &dyn BufferQuery,
+        buffer: &Buffer,
+        cursor: usize,
         text: Option<&str>,
     ) -> Vec<EditorAction> {
         if let Some(kp) = KeyPress::from_iced(key, modifiers)
@@ -762,7 +767,7 @@ impl InputState {
         {
             match keymap.lookup(&[kp]) {
                 KeymapLookup::Match(cmd) => {
-                    return commands::resolve(cmd, 1, self, buf);
+                    return commands::resolve(cmd, 1, self, buffer, cursor);
                 }
                 _ => {
                     if !matches!(key, keyboard::Key::Named(keyboard::key::Named::Space)) {
@@ -791,7 +796,8 @@ impl InputState {
         &mut self,
         key: &keyboard::Key,
         keymap: &Keymap,
-        buf: &dyn BufferQuery,
+        buffer: &Buffer,
+        cursor: usize,
     ) -> Vec<EditorAction> {
         if is_bare_modifier(key) {
             return vec![];
@@ -804,7 +810,7 @@ impl InputState {
                     if let Some(text_obj) = parse_text_object(modifier, obj) {
                         self.pending_keys.clear();
                         self.count_accum = None;
-                        let (start, end) = resolve_text_object(buf, text_obj);
+                        let (start, end) = resolve_text_object(buffer, cursor, text_obj);
                         if start != end {
                             self.selection_anchor = Some(start);
                             return vec![
@@ -841,7 +847,7 @@ impl InputState {
                     let count = self.count_accum.unwrap_or(1);
                     self.pending_keys.clear();
                     self.count_accum = None;
-                    commands::resolve(cmd, count, self, buf)
+                    commands::resolve(cmd, count, self, buffer, cursor)
                 }
                 KeymapLookup::Pending => vec![],
                 KeymapLookup::NoMatch => {
