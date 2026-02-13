@@ -112,6 +112,8 @@ pub fn resolve(
             vec![]
         }
 
+        "picker.buffers" => input.open_buffer_picker(),
+
         "search.next" => vec![EditorAction::SearchNext { count }],
         "search.prev" => vec![EditorAction::SearchPrev { count }],
 

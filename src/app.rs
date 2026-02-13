@@ -1,4 +1,4 @@
-use crate::action::{EditorEffect, PickerKind};
+use crate::action::{EditorAction, EditorEffect, PickerKind};
 use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::layout::{LayoutNode, SplitDirection};
@@ -125,7 +125,6 @@ impl Remax {
                 modifiers,
                 text,
             } => {
-                // Picker intercepts all keys when active
                 if self.picker.is_some() {
                     return self.handle_picker_key(&key, &modifiers, text.as_deref());
                 }
@@ -154,7 +153,7 @@ impl Remax {
 
                 for action in actions {
                     match action {
-                        crate::action::EditorAction::OpenPicker(kind) => {
+                        EditorAction::OpenPicker(kind) => {
                             self.open_picker(kind);
                             return Task::none();
                         }

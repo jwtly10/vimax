@@ -216,6 +216,11 @@ impl InputState {
         self.mode = VimMode::Search;
     }
 
+    pub fn open_buffer_picker(&mut self) -> Vec<EditorAction> {
+        self.mode = VimMode::Normal;
+        vec![EditorAction::OpenPicker(PickerKind::Buffers)]
+    }
+
     pub fn enter_visual(&mut self, cursor: usize) {
         info!("entering visual mode");
         self.selection_anchor = Some(cursor);
@@ -281,11 +286,7 @@ impl InputState {
         actions
     }
 
-    pub fn compute_selection(
-        &self,
-        buffer: &Buffer,
-        cursor: usize,
-    ) -> Option<(usize, usize)> {
+    pub fn compute_selection(&self, buffer: &Buffer, cursor: usize) -> Option<(usize, usize)> {
         let anchor = self.selection_anchor?;
 
         if self.mode == VimMode::VisualLine {
@@ -385,7 +386,9 @@ impl InputState {
             VimMode::Visual | VimMode::VisualLine => {
                 self.handle_visual(modified_key, mode_keymap, buffer, cursor)
             }
-            VimMode::Insert => self.handle_insert(key, modifiers, mode_keymap, buffer, cursor, text),
+            VimMode::Insert => {
+                self.handle_insert(key, modifiers, mode_keymap, buffer, cursor, text)
+            }
             VimMode::Command => self.handle_command(key, text),
             VimMode::Search => self.handle_search(key, text),
         }
@@ -447,7 +450,6 @@ impl InputState {
 
         if let Some(kp) = KeyPress::from_iced(key, &keyboard::Modifiers::default()) {
             self.pending_keys.push(kp);
-
             match keymap.lookup(&self.pending_keys) {
                 KeymapLookup::Match(cmd) => {
                     let count = self.count_accum.unwrap_or(1);
@@ -501,7 +503,13 @@ impl InputState {
                 self.count_accum = None;
 
                 return self.resolve_operator_with_find_char(
-                    operator, ch, forward, stop_before, count, buffer, cursor,
+                    operator,
+                    ch,
+                    forward,
+                    stop_before,
+                    count,
+                    buffer,
+                    cursor,
                 );
             }
             self.pending_operator = None;
@@ -529,8 +537,7 @@ impl InputState {
         if let Some(kp) = KeyPress::from_iced(key, &keyboard::Modifiers::default()) {
             self.pending_keys.push(kp);
 
-            if self.pending_keys.len() == 1
-                && matches!(kp.key, KeyId::Char('i') | KeyId::Char('a'))
+            if self.pending_keys.len() == 1 && matches!(kp.key, KeyId::Char('i') | KeyId::Char('a'))
             {
                 return vec![];
             }
@@ -545,7 +552,8 @@ impl InputState {
                         self.pending_operator = None;
                         self.pending_keys.clear();
                         self.count_accum = None;
-                        return self.resolve_operator_text_object(operator, obj, count, buffer, cursor);
+                        return self
+                            .resolve_operator_text_object(operator, obj, count, buffer, cursor);
                     }
                     self.pending_keys.clear();
                     self.pending_keys.push(second);
@@ -629,22 +637,28 @@ impl InputState {
             "cursor.move_to_end" => (Motion::FileEnd, false),
             "motion.repeat_find_char" => {
                 if let Some((ch, forward, stop_before)) = self.last_find_char {
-                    (Motion::FindChar {
-                        ch,
-                        forward,
-                        stop_before,
-                    }, true)
+                    (
+                        Motion::FindChar {
+                            ch,
+                            forward,
+                            stop_before,
+                        },
+                        true,
+                    )
                 } else {
                     return vec![];
                 }
             }
             "motion.repeat_find_char_reverse" => {
                 if let Some((ch, forward, stop_before)) = self.last_find_char {
-                    (Motion::FindChar {
-                        ch,
-                        forward: !forward,
-                        stop_before,
-                    }, true)
+                    (
+                        Motion::FindChar {
+                            ch,
+                            forward: !forward,
+                            stop_before,
+                        },
+                        true,
+                    )
                 } else {
                     return vec![];
                 }
@@ -733,12 +747,7 @@ impl InputState {
         self.emit_operator(operator, start, end)
     }
 
-    fn emit_operator(
-        &mut self,
-        operator: Operator,
-        start: usize,
-        end: usize,
-    ) -> Vec<EditorAction> {
+    fn emit_operator(&mut self, operator: Operator, start: usize, end: usize) -> Vec<EditorAction> {
         let range = Range { start, end };
         match operator {
             Operator::Delete => vec![EditorAction::DeleteRange(range)],
@@ -867,11 +876,7 @@ impl InputState {
         }
     }
 
-    fn handle_search(
-        &mut self,
-        key: &keyboard::Key,
-        text: Option<&str>,
-    ) -> Vec<EditorAction> {
+    fn handle_search(&mut self, key: &keyboard::Key, text: Option<&str>) -> Vec<EditorAction> {
         if let keyboard::Key::Named(named) = key {
             match named {
                 keyboard::key::Named::Escape => {
@@ -916,11 +921,7 @@ impl InputState {
         vec![]
     }
 
-    fn handle_command(
-        &mut self,
-        key: &keyboard::Key,
-        text: Option<&str>,
-    ) -> Vec<EditorAction> {
+    fn handle_command(&mut self, key: &keyboard::Key, text: Option<&str>) -> Vec<EditorAction> {
         if let keyboard::Key::Named(named) = key {
             match named {
                 keyboard::key::Named::Escape => {

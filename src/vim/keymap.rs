@@ -7,6 +7,13 @@ use super::mode::VimMode;
 
 pub type CommandId = &'static str;
 
+const LEADER_KEY: KeyPress = KeyPress {
+    key: KeyId::Named(keyboard::key::Named::Space),
+    ctrl: false,
+    alt: false,
+    cmd: false,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyId {
     Char(char),
@@ -86,6 +93,7 @@ pub enum KeymapLookup {
     NoMatch,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Keymap {
     bindings: HashMap<Vec<KeyPress>, CommandId>,
     prefixes: HashMap<Vec<KeyPress>, ()>,
@@ -208,6 +216,12 @@ pub fn build_global_keymap() -> Keymap {
 pub fn build_normal_keymap() -> Keymap {
     let mut km = Keymap::new();
 
+    // LEADER BB for buffer picker
+    km.bind(
+        vec![LEADER_KEY, KeyPress::char('b'), KeyPress::char('b')],
+        "picker.buffers",
+    );
+
     km.bind(vec![KeyPress::char('h')], "cursor.move_left");
     km.bind(vec![KeyPress::char('j')], "cursor.move_down");
     km.bind(vec![KeyPress::char('k')], "cursor.move_up");
@@ -291,6 +305,9 @@ fn build_visual_keymap(normal: &Keymap) -> Keymap {
     let mut km = Keymap::new();
 
     km.extend_from(normal);
+    // TODO: I hate having to repeat myself here... we should
+    // have an abstraction for normal ONLY bindings within the normal mapping
+    km.remove(&[LEADER_KEY, KeyPress::char('b'), KeyPress::char('b')]);
 
     km.remove(&[KeyPress::char('i')]);
     km.remove(&[KeyPress::char('a')]);
