@@ -6,11 +6,15 @@ use crate::action::{EditorAction, EditorEffect, Motion, Range};
 use crate::buffer::Buffer;
 use crate::layout::SplitDirection;
 use crate::registers::Registers;
+use crate::syntax::loader::Loader;
+use crate::syntax::SyntaxState;
 use crate::vim::mode::VimMode;
 use crate::workspace::Workspace;
 
 pub struct Editor {
     pub buffers: Vec<Buffer>,
+    pub syntax_states: Vec<Option<SyntaxState>>,
+    pub loader: Loader,
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
     pub registers: Registers,
@@ -22,14 +26,47 @@ pub struct Editor {
 impl Editor {
     pub fn new(buffer: Buffer, cwd: std::path::PathBuf) -> Self {
         let workspace = Workspace::new(0, cwd);
+        let loader = Loader::new();
+
+        let syntax = Self::create_syntax_for_buffer(&buffer, &loader);
+
         Self {
             buffers: vec![buffer],
+            syntax_states: vec![syntax],
+            loader,
             workspaces: vec![workspace],
             active_workspace: 0,
             registers: Registers::new(),
             search_pattern: String::new(),
             mode_display: String::from("NORMAL"),
             status_message: String::new(),
+        }
+    }
+
+    fn create_syntax_for_buffer(buffer: &Buffer, loader: &Loader) -> Option<SyntaxState> {
+        let ext = buffer
+            .file_path()
+            .and_then(|p| std::path::Path::new(p).extension())
+            .and_then(|e| e.to_str());
+
+        if let Some(ext) = ext {
+            if let Some(lang) = loader.language_for_extension(ext) {
+                return SyntaxState::new(buffer.rope(), lang, loader);
+            }
+        }
+        None
+    }
+
+    pub fn ensure_syntax_current(&mut self) {
+        let ws = &self.workspaces[self.active_workspace];
+        for win in &ws.windows {
+            let buf_id = win.buffer_id;
+            if buf_id < self.syntax_states.len() {
+                if let Some(state) = &mut self.syntax_states[buf_id] {
+                    let version = self.buffers[buf_id].version();
+                    state.ensure_parsed(self.buffers[buf_id].rope(), version, &self.loader);
+                }
+            }
         }
     }
 
@@ -92,8 +129,10 @@ impl Editor {
         match std::fs::read_to_string(path) {
             Ok(content) => {
                 let buffer = Buffer::from_str(&content, &buf_name, path, false);
+                let syntax = Self::create_syntax_for_buffer(&buffer, &self.loader);
                 let buf_id = self.buffers.len();
                 self.buffers.push(buffer);
+                self.syntax_states.push(syntax);
                 self.workspace_mut().reset_window_for_buffer(buf_id);
                 self.status_message = format!("\"{}\"", path.display());
             }
@@ -141,6 +180,9 @@ impl Editor {
             return;
         }
         self.buffers.remove(buf_id);
+        if buf_id < self.syntax_states.len() {
+            self.syntax_states.remove(buf_id);
+        }
         let buf_count = self.buffers.len();
         for ws in &mut self.workspaces {
             ws.fix_buffer_ids_after_remove(buf_id, buf_count);

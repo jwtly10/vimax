@@ -1,4 +1,5 @@
 use crate::buffer::Buffer;
+use crate::syntax::highlight::HighlightSpan;
 use iced::advanced::layout;
 use iced::advanced::renderer::{self, Renderer as _};
 use iced::advanced::text::{self as iced_text, Renderer as _};
@@ -24,6 +25,7 @@ pub struct TextGrid<'a> {
     search_len: usize,
     window_id: usize,
     is_active: bool,
+    highlights: Vec<HighlightSpan>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -37,6 +39,7 @@ pub fn text_grid<'a>(
     search_len: usize,
     window_id: usize,
     is_active: bool,
+    highlights: Vec<HighlightSpan>,
 ) -> Element<'a, crate::app::Message> {
     Element::new(TextGrid {
         buffer,
@@ -48,6 +51,7 @@ pub fn text_grid<'a>(
         search_len,
         window_id,
         is_active,
+        highlights,
     })
 }
 
@@ -104,14 +108,24 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                         mouse::ScrollDelta::Pixels { x, .. } => *x / CHAR_WIDTH,
                     };
                     if cols.abs() > 0.1 {
-                        shell.publish(crate::app::Message::ScrollCols { delta: cols, window_id: wid });
+                        shell.publish(crate::app::Message::ScrollCols {
+                            delta: cols,
+                            window_id: wid,
+                        });
                     }
-                    shell.publish(crate::app::Message::ScrollLines { delta: lines, window_id: wid });
+                    shell.publish(crate::app::Message::ScrollLines {
+                        delta: lines,
+                        window_id: wid,
+                    });
                 }
             }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if let Some(pos) = cursor.position_in(bounds) {
-                    shell.publish(crate::app::Message::MouseClick { x: pos.x, y: pos.y, window_id: wid });
+                    shell.publish(crate::app::Message::MouseClick {
+                        x: pos.x,
+                        y: pos.y,
+                        window_id: wid,
+                    });
                 }
             }
             _ => {}
@@ -202,12 +216,15 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                         rope.line(line_idx).len_chars()
                     };
 
-                    if sel_col_end > scroll_x && sel_col_start < scroll_x + (bounds.width / CHAR_WIDTH) as usize {
+                    if sel_col_end > scroll_x
+                        && sel_col_start < scroll_x + (bounds.width / CHAR_WIDTH) as usize
+                    {
                         let draw_start = sel_col_start.saturating_sub(scroll_x);
                         let draw_end = sel_col_end.saturating_sub(scroll_x);
                         let text_x = bounds.x + GUTTER_WIDTH + 8.0;
                         let sel_x = text_x + (draw_start as f32 * CHAR_WIDTH);
-                        let sel_w = ((draw_end - draw_start) as f32 * CHAR_WIDTH).min(bounds.width - (sel_x - bounds.x));
+                        let sel_w = ((draw_end - draw_start) as f32 * CHAR_WIDTH)
+                            .min(bounds.width - (sel_x - bounds.x));
 
                         renderer.fill_quad(
                             renderer::Quad {
@@ -272,27 +289,107 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
             let display_str = line_str.trim_end_matches('\n').trim_end_matches('\r');
 
             let text_x = bounds.x + GUTTER_WIDTH + 8.0;
-
-            let scrolled_str: String = display_str.chars().skip(scroll_x).collect();
-
             let text_area_width = bounds.width - GUTTER_WIDTH - 8.0;
+            let default_color = Color::from_rgb(0.85, 0.85, 0.85);
 
-            renderer.fill_text(
-                iced_text::Text {
-                    content: scrolled_str,
-                    bounds: Size::new(text_area_width, LINE_HEIGHT),
-                    size: FONT_SIZE.into(),
-                    line_height: iced_text::LineHeight::Absolute(LINE_HEIGHT.into()),
-                    font: iced::Font::MONOSPACE,
-                    align_x: iced::Alignment::Start.into(),
-                    align_y: alignment::Vertical::Top,
-                    shaping: iced_text::Shaping::Basic,
-                    wrapping: iced_text::Wrapping::None,
-                },
-                iced::Point::new(text_x, y),
-                Color::from_rgb(0.85, 0.85, 0.85),
-                *viewport,
-            );
+            // Find highlight spans that overlap this line
+            let line_byte_start = rope.line_to_byte(line_idx) as u32;
+            let line_byte_end = if line_idx + 1 < total_lines {
+                rope.line_to_byte(line_idx + 1) as u32
+            } else {
+                rope.len_bytes() as u32
+            };
+
+            // Collect spans for this line using binary search
+            let first = self
+                .highlights
+                .partition_point(|s| s.byte_end <= line_byte_start);
+            let last = self
+                .highlights
+                .partition_point(|s| s.byte_start < line_byte_end);
+            let line_spans = &self.highlights[first..last];
+
+            if line_spans.is_empty() {
+                // No syntax — single fill_text in default color
+                let scrolled_str: String = display_str.chars().skip(scroll_x).collect();
+                renderer.fill_text(
+                    iced_text::Text {
+                        content: scrolled_str,
+                        bounds: Size::new(text_area_width, LINE_HEIGHT),
+                        size: FONT_SIZE.into(),
+                        line_height: iced_text::LineHeight::Absolute(LINE_HEIGHT.into()),
+                        font: iced::Font::MONOSPACE,
+                        align_x: iced::Alignment::Start.into(),
+                        align_y: alignment::Vertical::Top,
+                        shaping: iced_text::Shaping::Basic,
+                        wrapping: iced_text::Wrapping::None,
+                    },
+                    iced::Point::new(text_x, y),
+                    default_color,
+                    *viewport,
+                );
+            } else {
+                // Build colored segments for the visible portion of this line
+                // Convert byte offsets to char columns relative to line start
+                let line_char_start = rope.line_to_char(line_idx);
+                let display_len = display_str.chars().count();
+
+                // Build a color array for each char in the line
+                // Start with default, then paint spans over it
+                let mut char_colors: Vec<Color> = vec![default_color; display_len];
+
+                for span in line_spans {
+                    let span_start = span.byte_start.max(line_byte_start);
+                    let span_end = span.byte_end.min(line_byte_end);
+                    if span_start >= span_end {
+                        continue;
+                    }
+                    let col_start = rope.byte_to_char(span_start as usize) - line_char_start;
+                    let col_end = rope.byte_to_char(span_end as usize) - line_char_start;
+                    let col_start = col_start.min(display_len);
+                    let col_end = col_end.min(display_len);
+                    for col in col_start..col_end {
+                        char_colors[col] = span.color;
+                    }
+                }
+
+                // Now render runs of same-colored characters
+                let visible_start = scroll_x.min(display_len);
+                let chars: Vec<char> = display_str.chars().collect();
+
+                if visible_start < display_len {
+                    let mut run_start = visible_start;
+                    while run_start < display_len {
+                        let run_color = char_colors[run_start];
+                        let mut run_end = run_start + 1;
+                        while run_end < display_len && char_colors[run_end] == run_color {
+                            run_end += 1;
+                        }
+
+                        let run_text: String = chars[run_start..run_end].iter().collect();
+                        let x_offset = (run_start - scroll_x) as f32 * CHAR_WIDTH;
+
+                        renderer.fill_text(
+                            iced_text::Text {
+                                content: run_text,
+                                bounds: Size::new(text_area_width - x_offset, LINE_HEIGHT),
+                                size: FONT_SIZE.into(),
+                                line_height: iced_text::LineHeight::Absolute(LINE_HEIGHT.into()),
+                                font: iced::Font::MONOSPACE,
+                                align_x: iced::Alignment::Start.into(),
+                                align_y: alignment::Vertical::Top,
+                                shaping: iced_text::Shaping::Basic,
+                                wrapping: iced_text::Wrapping::None,
+                            },
+                            iced::Point::new(text_x + x_offset, y),
+                            run_color,
+                            *viewport,
+                        );
+
+                        run_start = run_end;
+                    }
+                }
+            }
 
             if self.is_active && line_idx == cursor_line && cursor_col >= scroll_x {
                 let cursor_x = text_x + ((cursor_col - scroll_x) as f32 * CHAR_WIDTH);

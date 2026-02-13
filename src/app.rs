@@ -12,7 +12,7 @@ use iced::widget::{column, container, row, text};
 use iced::{Element, Length, Subscription, Task, Theme, event, window};
 use tracing::{debug, info};
 
-const SCROLL_SPEED: f32 = 0.3;
+const SCROLL_SPEED: f32 = 0.5;
 
 pub struct Remax {
     editor: Editor,
@@ -135,13 +135,8 @@ impl Remax {
                         buffer: self.editor.buffer(),
                         cursor: self.editor.cursor(),
                     };
-                    self.vim.handle_key(
-                        &key,
-                        &modified_key,
-                        &modifiers,
-                        text.as_deref(),
-                        &view,
-                    )
+                    self.vim
+                        .handle_key(&key, &modified_key, &modifiers, text.as_deref(), &view)
                 };
 
                 for action in actions {
@@ -156,6 +151,7 @@ impl Remax {
                 }
                 self.editor.update_search_cache();
                 self.editor.ensure_cursor_visible();
+                self.editor.ensure_syntax_current();
             }
             Message::ScrollLines { delta, window_id } => {
                 let ws = self.editor.workspace_mut();
@@ -182,8 +178,7 @@ impl Remax {
                 ws.active_window = window_id;
                 if window_id < ws.windows.len() {
                     let win = &ws.windows[window_id];
-                    let line =
-                        win.viewport.scroll_y + (y / text_grid::LINE_HEIGHT) as usize;
+                    let line = win.viewport.scroll_y + (y / text_grid::LINE_HEIGHT) as usize;
                     let col = win.viewport.scroll_x
                         + ((x - text_grid::GUTTER_WIDTH - 8.0).max(0.0) / text_grid::CHAR_WIDTH)
                             as usize;
@@ -193,13 +188,15 @@ impl Remax {
                     self.editor.ensure_cursor_visible();
                 }
             }
-            Message::ViewportResized { lines, cols, window_id } => {
+            Message::ViewportResized {
+                lines,
+                cols,
+                window_id,
+            } => {
                 let ws = self.editor.workspace_mut();
                 if window_id < ws.windows.len() {
                     let win = &mut ws.windows[window_id];
-                    if win.viewport.visible_lines != lines
-                        || win.viewport.visible_cols != cols
-                    {
+                    if win.viewport.visible_lines != lines || win.viewport.visible_cols != cols {
                         win.viewport.visible_lines = lines;
                         win.viewport.visible_cols = cols;
                     }
@@ -225,19 +222,11 @@ impl Remax {
             .size(14)
             .color(iced::Color::from_rgb(mr, mg, mb));
 
-        let modified_indicator = if active_buf.is_modified() {
-            "[+]"
-        } else {
-            ""
-        };
+        let modified_indicator = if active_buf.is_modified() { "[+]" } else { "" };
 
-        let buffer_name = text(format!(
-            " {} {}",
-            active_buf.name(),
-            modified_indicator
-        ))
-        .size(14)
-        .color(iced::Color::from_rgb(0.8, 0.8, 0.8));
+        let buffer_name = text(format!(" {} {}", active_buf.name(), modified_indicator))
+            .size(14)
+            .color(iced::Color::from_rgb(0.8, 0.8, 0.8));
 
         let position = text(format!(" {}:{} ", cursor_line + 1, cursor_col + 1))
             .size(14)
@@ -300,6 +289,22 @@ impl Remax {
                 let buffer = &self.editor.buffers[win.buffer_id];
                 let is_active = *win_id == active_win_id;
 
+                let highlights =
+                    if let Some(Some(state)) = self.editor.syntax_states.get(win.buffer_id) {
+                        let rope = buffer.rope();
+                        let start_byte = rope.line_to_byte(win.viewport.scroll_y) as u32;
+                        let end_line = (win.viewport.scroll_y + win.viewport.visible_lines + 2)
+                            .min(rope.len_lines());
+                        let end_byte = if end_line < rope.len_lines() {
+                            rope.line_to_byte(end_line) as u32
+                        } else {
+                            rope.len_bytes() as u32
+                        };
+                        state.highlights_for_range(rope, &self.editor.loader, start_byte, end_byte)
+                    } else {
+                        Vec::new()
+                    };
+
                 let grid = text_grid::text_grid(
                     buffer,
                     win.cursor,
@@ -307,9 +312,14 @@ impl Remax {
                     win.viewport.scroll_x,
                     win.selection,
                     &win.search_matches,
-                    if is_active { self.editor.search_len() } else { 0 },
+                    if is_active {
+                        self.editor.search_len()
+                    } else {
+                        0
+                    },
                     *win_id,
                     is_active,
+                    highlights,
                 );
 
                 container(grid)
@@ -317,7 +327,11 @@ impl Remax {
                     .height(Length::Fill)
                     .into()
             }
-            LayoutNode::Split { direction, children, .. } => {
+            LayoutNode::Split {
+                direction,
+                children,
+                ..
+            } => {
                 let first = self.build_layout_view(&children[0], ws, active_win_id);
                 let second = self.build_layout_view(&children[1], ws, active_win_id);
 

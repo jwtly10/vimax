@@ -11,3 +11,6 @@ ropey = "1.6.1"
 smol_str = "0.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+tree-house = "0.3"
+tree-house-bindings = { version = "0.2", features = ["ropey", "tree-sitter-language"] }
+tree-sitter-rust = "0.24.0"
