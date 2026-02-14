@@ -131,7 +131,6 @@ impl Editor {
                 language = lang,
                 "detected language for file"
             );
-            // TODO: This should be dynamic (based on cargo.toml, go.mod etc) - but for now just workspace root
             let cwd = self.workspace().cwd.clone();
             self.workspace_mut()
                 .lsp_manager

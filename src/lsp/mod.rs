@@ -1,4 +1,8 @@
-use std::path::Path;
+use std::{
+    path::{Path, PathBuf},
+    process::{Child, ChildStdin, Stdio},
+    sync::mpsc::{Receiver, channel},
+};
 
 use tracing::{debug, info};
 
@@ -8,11 +12,10 @@ pub struct LspManager {
 
 pub struct LspServer {
     language_id: String,
-    process: std::process::Child,
-    // stdin: std::process::ChildStdin,
-    // // stdout is moved into the iced Subscription
-    // capabilities: Option<ServerCapabilities>,
-    root_path: String, // TODO: This should be set dynamically based on the nearest toml or something per language & fallback to workspace
+    process: Child,
+    stdin: ChildStdin,
+    rx: Receiver<String>,
+    root_path: PathBuf, // TODO: This should be set dynamically based on the nearest toml or something per language & fallback to workspace
     initialized: bool,
 }
 
@@ -36,21 +39,47 @@ impl LspManager {
 
         info!(?language_id, ?root_path, "starting LSP server from root");
         let lsp_config = get_config(language_id).expect("Unsupported language");
-        // let process = std::process::Command::new(lsp_config.cmd)
-        //     .args(lsp_config.args)
-        //     .stdin(std::process::Stdio::piped())
-        //     .stdout(std::process::Stdio::piped())
-        //     .spawn()
-        //     .expect("Failed to start LSP server");
-        //
-        // let server = LspServer {
-        //     language_id: language_id.to_string(),
-        //     process,
-        //     root_uri: root_uri.to_string(),
-        //     initialized: false,
-        // };
-        //
-        // self.servers.push(server);
+        let mut process = std::process::Command::new(lsp_config.cmd)
+            .args(lsp_config.args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("Failed to start LSP server");
+
+        let stdin = process.stdin.take().unwrap();
+        let stdout = process.stdout.take().unwrap();
+        let (tx, rx) = channel();
+
+        let server = LspServer {
+            language_id: language_id.to_string(),
+            process,
+            stdin,
+            root_path: root_path.to_path_buf(),
+            rx,
+
+            initialized: false,
+        };
+
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                match line {
+                    Ok(line) => {
+                        debug!(?line, "LSP server output");
+                        if tx.send(line).is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        debug!(?e, "Error reading from LSP server");
+                        break;
+                    }
+                }
+            }
+        });
+
+        self.servers.push(server);
     }
 }
 
