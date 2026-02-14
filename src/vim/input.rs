@@ -97,6 +97,59 @@ pub struct InputState {
     pub pending_replace: bool,
     pub pending_find_char: Option<(bool, bool)>,
     pub last_find_char: Option<(char, bool, bool)>,
+    pub search_history: History,
+    pub command_history: History,
+}
+
+pub struct History {
+    entries: Vec<String>,
+    index: Option<usize>,
+    scratch: Option<String>, // latest command 'cache'
+}
+
+impl History {
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            index: None,
+            scratch: None,
+        }
+    }
+    pub fn push(&mut self, entry: String) {
+        self.entries.push(entry);
+        self.index = None;
+        self.scratch = None;
+    }
+    pub fn up(&mut self, current: &mut String) {
+        if let Some(idx) = self.index {
+            if idx > 0 {
+                self.index = Some(idx - 1);
+                *current = self.entries[idx - 1].clone();
+            }
+        } else if !self.entries.is_empty() {
+            self.index = Some(self.entries.len() - 1);
+            // Store the actual cmd so that we can restore it
+            self.scratch = Some(current.clone());
+            *current = self.entries.last().unwrap().clone();
+        }
+    }
+    pub fn down(&mut self, current: &mut String) {
+        if let Some(idx) = self.index {
+            if idx + 1 < self.entries.len() {
+                self.index = Some(idx + 1);
+                *current = self.entries[idx + 1].clone();
+            } else {
+                self.index = None;
+                if let Some(scratch) = self.scratch.take() {
+                    *current = scratch;
+                }
+            }
+        }
+    }
+    pub fn reset(&mut self) {
+        self.index = None;
+        self.scratch = None;
+    }
 }
 
 impl InputState {
@@ -113,6 +166,8 @@ impl InputState {
             pending_replace: false,
             pending_find_char: None,
             last_find_char: None,
+            search_history: History::new(),
+            command_history: History::new(),
         }
     }
 
@@ -891,6 +946,7 @@ impl InputState {
                 keyboard::key::Named::Escape => {
                     self.search_query.clear();
                     self.mode = VimMode::Normal;
+                    self.search_history.reset();
                     return vec![EditorAction::SetMode("NORMAL".to_string())];
                 }
                 keyboard::key::Named::Enter => {
@@ -900,11 +956,21 @@ impl InputState {
                     if query.is_empty() {
                         return vec![EditorAction::SetMode("NORMAL".to_string())];
                     }
+                    debug!(?query, "init vim search");
+                    self.search_history.push(query.clone());
                     return vec![
                         EditorAction::SetSearchPattern(query),
                         EditorAction::SearchNext { count: 1 },
                         EditorAction::SetMode("NORMAL".to_string()),
                     ];
+                }
+                keyboard::key::Named::ArrowUp => {
+                    self.search_history.up(&mut self.search_query);
+                    return vec![];
+                }
+                keyboard::key::Named::ArrowDown => {
+                    self.search_history.down(&mut self.search_query);
+                    return vec![];
                 }
                 keyboard::key::Named::Backspace => {
                     if self.search_query.is_empty() {
@@ -936,6 +1002,7 @@ impl InputState {
                 keyboard::key::Named::Escape => {
                     self.command_line.clear();
                     self.mode = VimMode::Normal;
+                    self.command_history.reset();
                     return vec![EditorAction::SetMode("NORMAL".to_string())];
                 }
                 keyboard::key::Named::Enter => {
@@ -944,7 +1011,16 @@ impl InputState {
                     self.mode = VimMode::Normal;
                     let mut actions = vec![EditorAction::SetMode("NORMAL".to_string())];
                     actions.extend(Self::resolve_ex_command(&cmd));
+                    self.command_history.push(cmd);
                     return actions;
+                }
+                keyboard::key::Named::ArrowUp => {
+                    self.command_history.up(&mut self.command_line);
+                    return vec![];
+                }
+                keyboard::key::Named::ArrowDown => {
+                    self.command_history.down(&mut self.command_line);
+                    return vec![];
                 }
                 keyboard::key::Named::Backspace => {
                     if self.command_line.is_empty() {
