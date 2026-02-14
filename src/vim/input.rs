@@ -221,9 +221,13 @@ impl InputState {
         vec![EditorAction::OpenPicker(PickerKind::Buffers)]
     }
 
-    pub fn open_project_files_picker(&mut self) -> Vec<EditorAction> {
+    // TODO: These config opts come from configuration
+    pub fn open_project_files_picker(&mut self, show_ignored: bool) -> Vec<EditorAction> {
         self.mode = VimMode::Normal;
-        vec![EditorAction::OpenPicker(PickerKind::ProjectFiles)]
+        vec![EditorAction::OpenPicker(PickerKind::ProjectFiles {
+            show_ignored,
+            max_results: 1000,
+        })]
     }
 
     pub fn enter_visual(&mut self, cursor: usize) {

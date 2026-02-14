@@ -376,12 +376,28 @@ impl Remax {
                     self.preview_selected_buffer();
                 }
             }
-            PickerKind::ProjectFiles => {
+            PickerKind::ProjectFiles {
+                show_ignored,
+                max_results,
+            } => {
                 let cwd = &self.editor.workspace().cwd;
                 let files = ignore::WalkBuilder::new(cwd)
+                    .git_ignore(!show_ignored)
+                    .git_exclude(!show_ignored)
+                    .filter_entry(|entry| {
+                        // TODO: this will be configurable
+                        // there are some dirs we just never want to look at
+                        let custom_ignores = [".git", "target", "node_modules", "dist", "build"];
+                        let file_name = entry.file_name().to_string_lossy();
+                        if custom_ignores.contains(&file_name.as_ref()) {
+                            return false;
+                        }
+
+                        true
+                    })
                     .build()
                     .filter_map(|entry| entry.ok())
-                    .take(100) // TODO: Max 100 files
+                    .take(max_results)
                     .filter(|entry| entry.file_type().map(|ft| ft.is_file()).unwrap_or(false))
                     .map(|entry| {
                         let path = entry.path();
@@ -424,7 +440,10 @@ impl Remax {
                 self.active_picker_type = None;
             }
             keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                if let Some(PickerKind::ProjectFiles) = self.active_picker_type
+                if let Some(PickerKind::ProjectFiles {
+                    show_ignored: _,
+                    max_results: _,
+                }) = self.active_picker_type
                     && let Some(picker) = &self.picker
                     && let Some(item) = picker.selected_item()
                 {

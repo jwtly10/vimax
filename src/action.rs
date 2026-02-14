@@ -6,7 +6,10 @@ use crate::vim::mode::VimMode;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerKind {
     Buffers,
-    ProjectFiles,
+    ProjectFiles {
+        show_ignored: bool,
+        max_results: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -225,6 +225,11 @@ pub fn build_normal_keymap() -> Keymap {
         "picker.project_files",
     );
 
+    km.bind(
+        vec![LEADER_KEY, KeyPress::char('p'), KeyPress::char('g')],
+        "picker.project_files_show_ignored",
+    );
+
     km.bind(vec![KeyPress::char('h')], "cursor.move_left");
     km.bind(vec![KeyPress::char('j')], "cursor.move_down");
     km.bind(vec![KeyPress::char('k')], "cursor.move_up");
@@ -312,6 +317,7 @@ fn build_visual_keymap(normal: &Keymap) -> Keymap {
     // have an abstraction for normal ONLY bindings within the normal mapping
     km.remove(&[LEADER_KEY, KeyPress::char('b'), KeyPress::char('b')]);
     km.remove(&[LEADER_KEY, KeyPress::char('p'), KeyPress::char('f')]);
+    km.remove(&[LEADER_KEY, KeyPress::char('p'), KeyPress::char('g')]);
 
     km.remove(&[KeyPress::char('i')]);
     km.remove(&[KeyPress::char('a')]);
