@@ -113,6 +113,7 @@ pub fn resolve(
         }
 
         "picker.buffers" => input.open_buffer_picker(),
+        "picker.project_files" => input.open_project_files_picker(),
 
         "search.next" => vec![EditorAction::SearchNext { count }],
         "search.prev" => vec![EditorAction::SearchPrev { count }],

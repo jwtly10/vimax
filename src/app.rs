@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::action::{EditorAction, EditorEffect, PickerKind};
 use crate::buffer::Buffer;
 use crate::editor::Editor;
@@ -18,6 +20,7 @@ pub struct Remax {
     editor: Editor,
     vim: VimLayer,
     picker: Option<Picker>,
+    active_picker_type: Option<PickerKind>,
     picker_restore_buffer: Option<usize>,
 }
 
@@ -80,6 +83,7 @@ impl Remax {
                 editor: Editor::new(buffer, cwd),
                 vim: VimLayer::new(),
                 picker: None,
+                active_picker_type: None,
                 picker_restore_buffer: None,
             },
             Task::none(),
@@ -358,6 +362,7 @@ impl Remax {
     }
 
     fn open_picker(&mut self, kind: PickerKind) {
+        self.active_picker_type = Some(kind);
         match kind {
             PickerKind::Buffers => {
                 let buf_list = self.editor.buffer_list();
@@ -370,6 +375,23 @@ impl Remax {
                 if !self.picker.as_ref().unwrap().items.is_empty() {
                     self.preview_selected_buffer();
                 }
+            }
+            PickerKind::ProjectFiles => {
+                let cwd = &self.editor.workspace().cwd;
+                let files = ignore::WalkBuilder::new(cwd)
+                    .build()
+                    .filter_map(|entry| entry.ok())
+                    .take(100) // TODO: Max 100 files
+                    .filter(|entry| entry.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+                    .map(|entry| {
+                        let path = entry.path();
+                        let label = path.strip_prefix(cwd).unwrap_or(path).display().to_string();
+                        debug_assert!(!label.is_empty(), "file label should not be empty");
+                        PickerItem { id: 0, label }
+                    })
+                    .collect::<Vec<_>>();
+                self.picker_restore_buffer = Some(self.editor.workspace().window().buffer_id);
+                self.picker = Some(Picker::new("Git Files", files));
             }
         }
     }
@@ -399,43 +421,61 @@ impl Remax {
                     self.editor.workspace_mut().switch_buffer(buf_id, len_chars);
                 }
                 self.picker = None;
+                self.active_picker_type = None;
             }
             keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                if let Some(PickerKind::ProjectFiles) = self.active_picker_type
+                    && let Some(picker) = &self.picker
+                    && let Some(item) = picker.selected_item()
+                {
+                    self.editor.open_file(&PathBuf::from(&item.label));
+                }
+
                 self.picker = None;
+                self.active_picker_type = None;
                 self.picker_restore_buffer = None;
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
                 if let Some(picker) = &mut self.picker {
                     picker.move_up();
                 }
-                self.preview_selected_buffer();
+                if let Some(PickerKind::Buffers) = self.active_picker_type {
+                    self.preview_selected_buffer()
+                }
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
                 if let Some(picker) = &mut self.picker {
                     picker.move_down();
                 }
-                self.preview_selected_buffer();
+                if let Some(PickerKind::Buffers) = self.active_picker_type {
+                    self.preview_selected_buffer()
+                }
             }
             keyboard::Key::Character(c) if modifiers.control() && c.as_str() == "p" => {
                 if let Some(picker) = &mut self.picker {
                     picker.move_up();
                 }
-                self.preview_selected_buffer();
+                if let Some(PickerKind::Buffers) = self.active_picker_type {
+                    self.preview_selected_buffer()
+                }
             }
             keyboard::Key::Character(c) if modifiers.control() && c.as_str() == "n" => {
                 if let Some(picker) = &mut self.picker {
                     picker.move_down();
                 }
-                self.preview_selected_buffer();
+                if let Some(PickerKind::Buffers) = self.active_picker_type {
+                    self.preview_selected_buffer()
+                }
             }
             keyboard::Key::Named(keyboard::key::Named::Backspace) => {
                 if let Some(picker) = &mut self.picker {
                     picker.backspace();
                 }
-                self.preview_selected_buffer();
+                if let Some(PickerKind::Buffers) = self.active_picker_type {
+                    self.preview_selected_buffer()
+                }
             }
             _ => {
-                // Type character into picker query
                 if let Some(t) = text {
                     if let Some(picker) = &mut self.picker {
                         for ch in t.chars() {
@@ -444,7 +484,9 @@ impl Remax {
                             }
                         }
                     }
-                    self.preview_selected_buffer();
+                    if let Some(PickerKind::Buffers) = self.active_picker_type {
+                        self.preview_selected_buffer();
+                    }
                 }
             }
         }

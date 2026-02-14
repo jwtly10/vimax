@@ -221,6 +221,11 @@ impl InputState {
         vec![EditorAction::OpenPicker(PickerKind::Buffers)]
     }
 
+    pub fn open_project_files_picker(&mut self) -> Vec<EditorAction> {
+        self.mode = VimMode::Normal;
+        vec![EditorAction::OpenPicker(PickerKind::ProjectFiles)]
+    }
+
     pub fn enter_visual(&mut self, cursor: usize) {
         info!("entering visual mode");
         self.selection_anchor = Some(cursor);

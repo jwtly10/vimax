@@ -216,10 +216,13 @@ pub fn build_global_keymap() -> Keymap {
 pub fn build_normal_keymap() -> Keymap {
     let mut km = Keymap::new();
 
-    // LEADER BB for buffer picker
     km.bind(
         vec![LEADER_KEY, KeyPress::char('b'), KeyPress::char('b')],
         "picker.buffers",
+    );
+    km.bind(
+        vec![LEADER_KEY, KeyPress::char('p'), KeyPress::char('f')],
+        "picker.project_files",
     );
 
     km.bind(vec![KeyPress::char('h')], "cursor.move_left");
@@ -308,6 +311,7 @@ fn build_visual_keymap(normal: &Keymap) -> Keymap {
     // TODO: I hate having to repeat myself here... we should
     // have an abstraction for normal ONLY bindings within the normal mapping
     km.remove(&[LEADER_KEY, KeyPress::char('b'), KeyPress::char('b')]);
+    km.remove(&[LEADER_KEY, KeyPress::char('p'), KeyPress::char('f')]);
 
     km.remove(&[KeyPress::char('i')]);
     km.remove(&[KeyPress::char('a')]);
