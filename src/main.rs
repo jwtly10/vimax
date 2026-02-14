@@ -3,6 +3,7 @@ mod app;
 mod buffer;
 mod editor;
 mod layout;
+mod lsp;
 mod picker;
 mod registers;
 mod syntax;

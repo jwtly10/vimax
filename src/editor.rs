@@ -1,10 +1,11 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::action::{EditorAction, EditorEffect, Motion, Range};
 use crate::buffer::Buffer;
 use crate::layout::SplitDirection;
+use crate::lsp::detect_language_from_path;
 use crate::registers::Registers;
 use crate::syntax::SyntaxState;
 use crate::syntax::loader::Loader;
@@ -24,15 +25,13 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn new(buffer: Buffer, cwd: std::path::PathBuf) -> Self {
+    pub fn new(cwd: PathBuf) -> Self {
         let workspace = Workspace::new(0, cwd);
         let loader = Loader::new();
 
-        let syntax = Self::create_syntax_for_buffer(&buffer, &loader);
-
         Self {
-            buffers: vec![buffer],
-            syntax_states: vec![syntax],
+            buffers: Vec::new(),
+            syntax_states: Vec::new(),
             loader,
             workspaces: vec![workspace],
             active_workspace: 0,
@@ -123,6 +122,22 @@ impl Editor {
             self.workspace_mut().reset_window_for_buffer(idx);
             self.status_message = format!("\"{}\"", path.display());
             return;
+        }
+
+        let lang = detect_language_from_path(path);
+        if let Some(lang) = lang {
+            debug!(
+                path = path_str,
+                language = lang,
+                "detected language for file"
+            );
+            // TODO: This should be dynamic (based on cargo.toml, go.mod etc) - but for now just workspace root
+            let cwd = self.workspace().cwd.clone();
+            self.workspace_mut()
+                .lsp_manager
+                .start_server(&lang, cwd.as_path());
+        } else {
+            info!(path = path_str, "could not detect language for file");
         }
 
         let buf_name = path

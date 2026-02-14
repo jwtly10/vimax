@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::layout::{LayoutNode, SplitDirection};
+use crate::lsp::LspManager;
 use crate::window::Window;
 
 pub struct Workspace {
@@ -8,6 +9,7 @@ pub struct Workspace {
     pub active_window: usize,
     pub layout: LayoutNode,
     pub cwd: PathBuf,
+    pub lsp_manager: LspManager,
 }
 
 impl Workspace {
@@ -17,6 +19,7 @@ impl Workspace {
             active_window: 0,
             layout: LayoutNode::single(0),
             cwd,
+            lsp_manager: LspManager::new(),
         }
     }
 
@@ -53,7 +56,8 @@ impl Workspace {
         let new_window = Window::new(current_buf_id);
         let new_id = self.windows.len();
         self.windows.push(new_window);
-        self.layout.split_leaf(self.active_window, new_id, direction);
+        self.layout
+            .split_leaf(self.active_window, new_id, direction);
         self.active_window = new_id;
     }
 

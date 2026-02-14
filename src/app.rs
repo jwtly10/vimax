@@ -60,27 +60,28 @@ impl Remax {
 
     pub fn boot() -> (Self, Task<Message>) {
         let args = parse_args();
-        let buffer = if let Some(file_path) = args.first() {
-            let path = std::path::Path::new(file_path);
-            let buf_name = path.file_name().unwrap_or_default().to_string_lossy();
-            debug!(?path, "attempting to read file into buffer");
-            match std::fs::read_to_string(path) {
-                Ok(content) => Buffer::from_str(&content, &buf_name, path, false),
-                Err(e) => {
-                    debug!(?e, "failed to read file, starting with empty buffer");
-                    create_scratch_buffer()
-                }
-            }
-        } else {
-            debug!("no file path provided, starting with empty buffer");
-            create_scratch_buffer()
-        };
-
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         info!(?cwd, "editor booted");
+
+        let mut editor = Editor::new(cwd);
+        if let Some(file_path) = args.first() {
+            let path = std::path::Path::new(file_path);
+            debug!(?path, "opening init file from args");
+            editor.open_file(path);
+        } else {
+            debug!("no file args, creating scratch buffer");
+            // TODO: assert may not hold up when we start persisting session
+            debug_assert!(
+                editor.buffers.is_empty(),
+                "buffers should technically always be empty on init"
+            );
+            let scratch_buf = create_scratch_buffer();
+            editor.buffers.push(scratch_buf);
+        }
+
         (
             Self {
-                editor: Editor::new(buffer, cwd),
+                editor,
                 vim: VimLayer::new(),
                 picker: None,
                 active_picker_type: None,
