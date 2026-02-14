@@ -208,13 +208,56 @@ impl Editor {
                 self.window_mut().cursor = new_cursor;
             }
             EditorAction::InsertNewline => {
+                // Basic heuristic approach to detect 'default' indentation
+                // TODO: Hopefully handled by LSP
                 let cursor = self.cursor();
-                let new_cursor = self.buffer_mut().insert_char(cursor, '\n');
+                let line_idx = self.buffer().char_to_line(cursor);
+                let line_start = self.buffer().line_to_char(line_idx);
+                let indent_width = self.buffer().indent_width() as usize;
+                let use_tabs = self.buffer().use_tabs();
+                let one_indent = if use_tabs {
+                    "\t".to_string()
+                } else {
+                    " ".repeat(indent_width)
+                };
+
+                let leading_ws: String = self
+                    .buffer()
+                    .rope()
+                    .line(line_idx)
+                    .chars()
+                    .take_while(|c| c.is_whitespace())
+                    .collect();
+
+                let line_to_cursor: String = self
+                    .buffer()
+                    .rope()
+                    .slice(line_start..cursor)
+                    .chars()
+                    .collect();
+                let last_significant = line_to_cursor.trim_end().chars().last();
+
+                let new_indent = match last_significant {
+                    Some('{') | Some('(') | Some('[') => {
+                        format!("{}{}", leading_ws, one_indent)
+                    }
+                    _ => leading_ws,
+                };
+
+                let new_cursor = self
+                    .buffer_mut()
+                    .insert_str(cursor, &format!("\n{}", new_indent));
                 self.window_mut().cursor = new_cursor;
             }
             EditorAction::InsertTab => {
                 let cursor = self.cursor();
-                let new_cursor = self.buffer_mut().insert_str(cursor, "    ");
+                let tab_char = match self.buffer().use_tabs() {
+                    true => "\t",
+                    false => " ",
+                };
+                let tab_str = tab_char.repeat(self.buffer().indent_width() as usize);
+
+                let new_cursor = self.buffer_mut().insert_str(cursor, tab_str.as_str());
                 self.window_mut().cursor = new_cursor;
             }
             EditorAction::DeleteTillEndOfLine => {

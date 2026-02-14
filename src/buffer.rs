@@ -14,6 +14,8 @@ pub struct Buffer {
     modified: bool,
     undo_stack: UndoStack,
     version: u64,
+    indent_width: u8,
+    use_tabs: bool,
 }
 
 impl Buffer {
@@ -26,18 +28,30 @@ impl Buffer {
             modified: false,
             undo_stack: UndoStack::new(),
             version: 0,
+            indent_width: 4,
+            use_tabs: false,
         }
     }
 
     pub fn from_str(s: &str, buf_name: &str, file_path: &Path, read_only: bool) -> Self {
+        let rope = Rope::from_str(s);
+        let (indent_width, use_tabs) = (4, false); // TODO: detect_indentation(&rope)
+        debug!(
+            ?indent_width,
+            ?use_tabs,
+            ?buf_name,
+            "detected indent configuration for buffer"
+        );
         Self {
-            rope: Rope::from_str(s),
+            rope,
             read_only,
             name: String::from(buf_name),
             file_path: Some(file_path.to_string_lossy().to_string()),
             modified: false,
             undo_stack: UndoStack::new(),
             version: 0,
+            indent_width,
+            use_tabs,
         }
     }
 
@@ -59,6 +73,14 @@ impl Buffer {
 
     pub fn rope(&self) -> &Rope {
         &self.rope
+    }
+
+    pub fn use_tabs(&self) -> bool {
+        self.use_tabs
+    }
+
+    pub fn indent_width(&self) -> u8 {
+        self.indent_width
     }
 
     pub fn len_chars(&self) -> usize {
@@ -916,6 +938,44 @@ impl Buffer {
         }
         pos
     }
+
+    // TODO: need a much better way than this
+    // way too naive, .src/main.rs for eg gets detected as 8 space
+    // because the file is mainly just functional methods to init the app
+    // fn detect_indentation(rope: &Rope) -> (u8, bool) {
+    //     let mut tabs = 0;
+    //     let mut spaces = 0;
+    //     let mut space_widths: [u32; 9] = [0; 9];
+    //
+    //     let lines_to_check = rope.len_lines().min(100);
+    //     for i in 0..lines_to_check {
+    //         let line = rope.line(i);
+    //         let first_char = line.chars().next();
+    //         match first_char {
+    //             Some('\t') => tabs += 1,
+    //             Some(' ') => {
+    //                 let count = line.chars().take_while(|&c| c == ' ').count();
+    //                 if count > 0 && count <= 8 {
+    //                     spaces += 1;
+    //                     space_widths[count] += 1;
+    //                 }
+    //             }
+    //             _ => {}
+    //         }
+    //     }
+    //
+    //     let use_tabs = tabs > spaces;
+    //     let width = if use_tabs {
+    //         4
+    //     } else {
+    //         [2u8, 4, 8]
+    //             .into_iter()
+    //             .max_by_key(|&w| space_widths.get(w as usize).copied().unwrap_or(0))
+    //             .unwrap_or(4)
+    //     };
+    //
+    //     (width, use_tabs)
+    // }
 }
 
 #[cfg(test)]
