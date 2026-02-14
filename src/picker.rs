@@ -8,11 +8,15 @@ pub struct PickerItem {
     pub label: String,
 }
 
+pub const PICKER_VISIBLE_LIMIT: usize = 10;
+
 pub struct Picker {
     pub items: Vec<PickerItem>,
     pub query: String,
     pub filtered: Vec<usize>,
     pub selected: usize,
+    pub scroll_offset: usize,
+    pub visible_limit: usize,
     pub title: String,
 }
 
@@ -24,6 +28,8 @@ impl Picker {
             query: String::new(),
             filtered,
             selected: 0,
+            scroll_offset: 0,
+            visible_limit: PICKER_VISIBLE_LIMIT,
             title: title.to_string(),
         }
     }
@@ -54,17 +60,29 @@ impl Picker {
         if self.selected >= self.filtered.len() {
             self.selected = self.filtered.len().saturating_sub(1);
         }
+        self.scroll_offset = self
+            .scroll_offset
+            .min(self.filtered.len().saturating_sub(self.visible_limit));
+        if self.selected < self.scroll_offset {
+            self.scroll_offset = self.selected;
+        }
     }
 
     pub fn move_up(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;
+            if self.selected < self.scroll_offset {
+                self.scroll_offset = self.selected;
+            }
         }
     }
 
     pub fn move_down(&mut self) {
         if !self.filtered.is_empty() && self.selected < self.filtered.len() - 1 {
             self.selected += 1;
+            if self.selected >= self.scroll_offset + self.visible_limit {
+                self.scroll_offset = self.selected - self.visible_limit + 1;
+            }
         }
     }
 
@@ -76,6 +94,14 @@ impl Picker {
     pub fn backspace(&mut self) {
         self.query.pop();
         self.update_filter();
+    }
+
+    pub fn visible_items(&self) -> impl Iterator<Item = (usize, &usize)> {
+        let end = (self.scroll_offset + self.visible_limit).min(self.filtered.len());
+        self.filtered[self.scroll_offset..end]
+            .iter()
+            .enumerate()
+            .map(move |(i, idx)| (self.scroll_offset + i, idx))
     }
 
     pub fn selected_item(&self) -> Option<&PickerItem> {

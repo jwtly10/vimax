@@ -301,7 +301,7 @@ impl Remax {
             .padding([2, 0]);
 
             let mut items_col = column![];
-            for (i, &item_idx) in picker.filtered.iter().enumerate() {
+            for (i, &item_idx) in picker.visible_items() {
                 let item = &picker.items[item_idx];
                 let is_selected = i == picker.selected;
                 let label = if is_selected {
