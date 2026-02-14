@@ -1,3 +1,8 @@
+use nucleo_matcher::{
+    Config, Matcher, Utf32Str,
+    pattern::{CaseMatching, Normalization, Pattern},
+};
+
 pub struct PickerItem {
     pub id: usize,
     pub label: String,
@@ -24,16 +29,28 @@ impl Picker {
     }
 
     pub fn update_filter(&mut self) {
-        let query_lower = self.query.to_lowercase();
-        self.filtered = self
+        let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
+        let pattern = Pattern::parse(
+            self.query.as_str(),
+            CaseMatching::Ignore,
+            Normalization::Smart,
+        );
+
+        // TODO: Could take this off render thread eventually
+        let mut scores: Vec<(usize, u32)> = self
             .items
             .iter()
             .enumerate()
-            .filter(|(_, item)| {
-                query_lower.is_empty() || item.label.to_lowercase().contains(&query_lower)
+            .filter_map(|(i, item)| {
+                let mut buf = Vec::new();
+                let score = pattern.score(Utf32Str::new(&item.label, &mut buf), &mut matcher)?;
+                Some((i, score))
             })
-            .map(|(i, _)| i)
             .collect();
+
+        scores.sort_by(|a, b| b.1.cmp(&a.1));
+        self.filtered = scores.into_iter().map(|(i, _)| i).collect();
+
         if self.selected >= self.filtered.len() {
             self.selected = self.filtered.len().saturating_sub(1);
         }
