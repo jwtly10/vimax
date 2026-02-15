@@ -313,15 +313,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async_command"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5afae929cfe2881793334cecb9aec12486c8f621740ead5335945131447c6371"
-dependencies = [
- "rusting",
-]
-
-[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2721,7 +2712,6 @@ dependencies = [
  "anyhow",
  "arboard",
  "async-process",
- "async_command",
  "iced",
  "ignore",
  "lsp-types",
@@ -2770,12 +2760,6 @@ name = "rustc-hash"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d"
-
-[[package]]
-name = "rusting"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f1d00fc016646bcab718bd1a60f56083ea3f656cea40b35855e069c033709c7"
 
 [[package]]
 name = "rustix"
