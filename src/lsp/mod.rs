@@ -2,16 +2,16 @@ use std::{collections::HashMap, path::Path, process::Stdio, sync::Arc};
 
 use async_process::{Child, ChildStdin, Command};
 use lsp_types::{
-    ClientCapabilities, ClientInfo, InitializeParams, ServerCapabilities, Uri,
-    notification::Notification, request::Request,
+    notification::Notification, request::Request, ClientCapabilities, ClientInfo, InitializeParams,
+    ServerCapabilities, Uri,
 };
 use smol::{
-    channel::{Receiver, unbounded},
+    channel::{unbounded, Receiver},
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     lock::Mutex,
     spawn,
 };
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
@@ -182,8 +182,7 @@ impl LspManager {
         let stdout = process.stdout.take().unwrap();
         let (tx, rx) = unbounded();
 
-        let root_uri_str = format!("file://{}", root_path.display());
-        let root_uri: Uri = root_uri_str.parse().expect("Failed to parse URI");
+        let root_uri = path_to_uri(root_path).expect("Failed to convert root path to URI");
         let server_id = self.servers.len();
         let server = LspServer {
             id: server_id,
@@ -372,7 +371,7 @@ pub fn lsp_position_to_offset(rope: &ropey::Rope, pos: &lsp_types::Position) -> 
 }
 
 /// Build a file:// URI from a path, canonicalizing to absolute.
-pub fn path_to_uri(path: &Path) -> Option<lsp_types::Uri> {
+pub fn path_to_uri(path: &Path) -> Option<Uri> {
     let abs = std::fs::canonicalize(path).ok()?;
     let uri_str = format!("file://{}", abs.display());
     uri_str.parse().ok()
