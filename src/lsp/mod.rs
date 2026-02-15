@@ -1,9 +1,10 @@
-use std::{path::Path, process::Stdio, sync::Arc};
+use std::{collections::HashMap, path::Path, process::Stdio, sync::Arc};
 
 use async_process::{Child, ChildStdin, Command};
 use lsp_types::{
     ClientCapabilities, ClientInfo, InitializeParams, ServerCapabilities, Uri,
     notification::Notification,
+    request::{Initialize, Request},
 };
 use smol::{
     channel::{Receiver, unbounded},
@@ -51,6 +52,13 @@ struct LspConfig {
 
 pub struct LspManager {
     pub servers: Vec<LspServer>,
+    next_request_id: i64,
+    pending_requests: HashMap<i64, PendingRequest>,
+}
+
+pub struct PendingRequest {
+    pub server_id: usize,
+    pub method: String,
 }
 
 impl LspServer {
@@ -75,13 +83,43 @@ impl LspServer {
         .detach();
         Ok(())
     }
+
+    pub fn send_request<N: Request>(&self, id: i64, params: N::Params) -> anyhow::Result<()> {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": N::METHOD,
+            "params": params,
+        });
+        let body = serde_json::to_string(&request)?;
+        let content_length = body.len();
+        let message = format!("Content-Length: {}\r\n\r\n{}", content_length, body);
+        debug!(message, "sending request to LSP server");
+
+        let stdin_handle = Arc::clone(&self.stdin);
+        spawn(async move {
+            let mut stdin = stdin_handle.lock().await;
+            stdin.write_all(message.as_bytes()).await.unwrap();
+            stdin.flush().await.unwrap();
+            debug!("request sent to LSP server");
+        })
+        .detach();
+
+        Ok(())
+    }
 }
 
 impl LspManager {
     pub fn new() -> Self {
         Self {
             servers: Vec::new(),
+            next_request_id: 1,
+            pending_requests: HashMap::new(),
         }
+    }
+
+    pub fn take_pending_request(&mut self, id: i64) -> Option<PendingRequest> {
+        self.pending_requests.remove(&id)
     }
 
     pub fn start_server(&mut self, language_id: &str, root_path: &Path) {
@@ -130,7 +168,6 @@ impl LspManager {
                     match reader.read_line(&mut header_buf).await {
                         Ok(0) => return, // EOF
                         Ok(_) => {
-                            debug!(raw_header = ?header_buf, "header line");
                             // Parsing the content length header
                             let line = header_buf.trim();
                             if line.is_empty() {
@@ -178,12 +215,21 @@ impl LspManager {
             ..Default::default()
         };
 
+        let req_id = self.next_request_id;
+        self.pending_requests.insert(
+            req_id,
+            PendingRequest {
+                server_id,
+                method: "initialize".to_string(),
+            },
+        );
         let request = serde_json::json!({
             "jsonrpc": "2.0",
-            "id": 1,
+            "id": req_id,
             "method": "initialize",
             "params": init_params,
         });
+        self.next_request_id += 1;
         let body = serde_json::to_string(&request).unwrap();
         let content_length = body.len();
         let message = format!("Content-Length: {}\r\n\r\n{}", content_length, body);
@@ -201,7 +247,7 @@ impl LspManager {
         self.servers.push(server);
     }
 
-    pub fn handle_message(&self, server_id: usize, raw: &str) -> Option<LspIncoming> {
+    pub fn handle_message(&self, raw: &str) -> Option<LspIncoming> {
         let json: serde_json::Value = serde_json::from_str(raw).ok()?;
 
         if let Some(id) = json.get("id") {
@@ -229,6 +275,26 @@ impl LspManager {
             })
         }
     }
+
+    pub fn send_request<R: Request>(&mut self, server_id: usize, params: R::Params) -> Option<i64> {
+        let server = self.servers.iter().find(|s| s.id == server_id)?;
+        if !server.initialized {
+            return None;
+        }
+
+        let request_id = self.next_request_id;
+        self.next_request_id += 1;
+
+        self.pending_requests.insert(
+            request_id,
+            PendingRequest {
+                server_id,
+                method: R::METHOD.to_string(),
+            },
+        );
+        server.send_request::<R>(request_id, params).ok()?;
+        Some(request_id)
+    }
 }
 
 fn get_config(language_id: &str) -> Option<LspConfig> {
@@ -242,7 +308,6 @@ fn get_config(language_id: &str) -> Option<LspConfig> {
 }
 
 pub fn detect_language_from_path(path: &Path) -> Option<String> {
-    debug!(?path, "detecting language from path");
     if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
         match ext {
             "rs" => Some("rust".to_string()),

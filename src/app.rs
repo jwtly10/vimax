@@ -297,35 +297,49 @@ impl Remax {
                 }
             }
             Message::Lsp { server_id, message } => {
-                if let Some(incoming) = self
-                    .editor
-                    .workspace()
-                    .lsp_manager
-                    .handle_message(server_id, &message)
+                if let Some(incoming) = self.editor.workspace().lsp_manager.handle_message(&message)
                 {
                     match incoming {
                         LspIncoming::Response { id, result } => {
-                            debug!(id, "got response");
-                            if id == 1 {
-                                debug!(result = ?result, "initialize response result");
-                                let capabilities: lsp_types::ServerCapabilities =
-                                    serde_json::from_value(result["capabilities"].clone()).unwrap();
-                                debug!(?capabilities, "server capabilities");
-                                if let Some(server) = self
-                                    .editor
-                                    .workspace_mut()
-                                    .lsp_manager
-                                    .servers
-                                    .iter_mut()
-                                    .find(|s| s.id == server_id)
-                                {
-                                    server.capabilities = Some(capabilities);
+                            debug!(id, "got lsp response");
+                            if let Some(pending) = self
+                                .editor
+                                .workspace_mut()
+                                .lsp_manager
+                                .take_pending_request(id)
+                            {
+                                match pending.method.as_str() {
+                                    "initialize" => {
+                                        debug!(?result, "server initialized");
+                                        let capabilities: lsp_types::ServerCapabilities =
+                                            serde_json::from_value(result["capabilities"].clone())
+                                                .unwrap();
+                                        debug!(?capabilities, "server capabilities");
+                                        if let Some(server) = self
+                                            .editor
+                                            .workspace_mut()
+                                            .lsp_manager
+                                            .servers
+                                            .iter_mut()
+                                            .find(|s| s.id == server_id)
+                                        {
+                                            server.capabilities = Some(capabilities);
 
-                                    if server
-                                        .send_notification::<Initialized>(InitializedParams {})
-                                        .is_ok()
-                                    {
-                                        server.initialized = true;
+                                            if server
+                                                .send_notification::<Initialized>(
+                                                    InitializedParams {},
+                                                )
+                                                .is_ok()
+                                            {
+                                                server.initialized = true;
+                                            }
+                                        }
+                                    }
+                                    "textDocument/definition" => {
+                                        debug!(?result, "definition response");
+                                    }
+                                    _ => {
+                                        debug!(method = %pending.method, "response matched pending request");
                                     }
                                 }
                             }
