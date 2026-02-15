@@ -13,8 +13,8 @@ use crate::buffer::Buffer;
 use crate::layout::SplitDirection;
 use crate::lsp::{offset_to_lsp_position, path_to_uri};
 use crate::registers::Registers;
-use crate::syntax::SyntaxState;
 use crate::syntax::loader::Loader;
+use crate::syntax::SyntaxState;
 use crate::vim::mode::VimMode;
 use crate::window::Window;
 use crate::workspace::Workspace;
@@ -214,6 +214,7 @@ impl Editor {
                 let syntax = Self::create_syntax_for_buffer(&buffer, &self.loader);
                 let buf_id = self.buffers.len();
                 let lang = buffer.language();
+                let version = buffer.version();
                 self.buffers.push(buffer);
                 if self.syntax_states.len() <= buf_id {
                     self.syntax_states.resize_with(buf_id + 1, || None);
@@ -244,7 +245,7 @@ impl Editor {
                                 text_document: TextDocumentItem {
                                     uri,
                                     language_id: lang.id().to_string(),
-                                    version: 0,
+                                    version: version as i32,
                                     text: content.clone(),
                                 },
                             })
