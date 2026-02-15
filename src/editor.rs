@@ -1,10 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use lsp_types::notification::DidOpenTextDocument;
+use lsp_types::notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument};
 use lsp_types::request::GotoDefinition;
 use lsp_types::{
-    DidOpenTextDocumentParams, GotoDefinitionParams, TextDocumentIdentifier, TextDocumentItem,
-    TextDocumentPositionParams,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DidSaveTextDocumentParams, GotoDefinitionParams, TextDocumentContentChangeEvent,
+    TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams,
+    VersionedTextDocumentIdentifier,
 };
 use tracing::{debug, error, info};
 
@@ -297,6 +299,7 @@ impl Editor {
             self.status_message = String::from("Unsaved changes! Use :bd! to force close");
             return;
         }
+        self.notify_lsp_did_close(&self.buffers[buf_id]);
         self.buffers.remove(buf_id);
         if buf_id < self.syntax_states.len() {
             self.syntax_states.remove(buf_id);
@@ -310,6 +313,7 @@ impl Editor {
     }
 
     pub fn execute(&mut self, action: EditorAction) -> EditorEffect {
+        let version_before = self.buffer().version();
         match action {
             EditorAction::MoveCursor { motion, count } => {
                 self.move_cursor(&motion, count);
@@ -469,6 +473,7 @@ impl Editor {
             EditorAction::Save => match self.buffer_mut().save() {
                 Ok(()) => {
                     info!("file saved");
+                    self.notify_lsp_did_save();
                     self.status_message = String::from("Written");
                 }
                 Err(e) => {
@@ -489,6 +494,7 @@ impl Editor {
             EditorAction::WriteQuit => match self.buffer_mut().save() {
                 Ok(()) => {
                     info!("file saved");
+                    self.notify_lsp_did_save();
                     let ws = &mut self.workspaces[self.active_workspace];
                     if ws.layout.leaf_count() > 1 {
                         ws.close_window();
@@ -636,7 +642,93 @@ impl Editor {
                 // Handled by app layer, not editor
             }
         }
+        if self.buffer().version() != version_before {
+            self.notify_lsp_did_change();
+        }
         EditorEffect::None
+    }
+
+    fn notify_lsp_did_change(&self) {
+        let buf = self.buffer();
+        let lang = match buf.language() {
+            Some(l) => l,
+            None => return,
+        };
+        let file_path = match buf.file_path() {
+            Some(p) => p,
+            None => return,
+        };
+        let server = match self.workspace().lsp_manager.get_inited_server_for_language(lang) {
+            Some(s) => s,
+            None => return,
+        };
+        let uri = match path_to_uri(Path::new(file_path)) {
+            Some(u) => u,
+            None => return,
+        };
+        server
+            .send_notification::<DidChangeTextDocument>(DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier {
+                    uri,
+                    version: buf.version() as i32,
+                },
+                content_changes: vec![TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: buf.rope().to_string(),
+                }],
+            })
+            .ok();
+    }
+
+    fn notify_lsp_did_save(&self) {
+        let buf = self.buffer();
+        let lang = match buf.language() {
+            Some(l) => l,
+            None => return,
+        };
+        let file_path = match buf.file_path() {
+            Some(p) => p,
+            None => return,
+        };
+        let server = match self.workspace().lsp_manager.get_inited_server_for_language(lang) {
+            Some(s) => s,
+            None => return,
+        };
+        let uri = match path_to_uri(Path::new(file_path)) {
+            Some(u) => u,
+            None => return,
+        };
+        server
+            .send_notification::<DidSaveTextDocument>(DidSaveTextDocumentParams {
+                text_document: TextDocumentIdentifier { uri },
+                text: Some(buf.rope().to_string()),
+            })
+            .ok();
+    }
+
+    fn notify_lsp_did_close(&self, buf: &Buffer) {
+        let lang = match buf.language() {
+            Some(l) => l,
+            None => return,
+        };
+        let file_path = match buf.file_path() {
+            Some(p) => p,
+            None => return,
+        };
+        let server = match self.workspace().lsp_manager.get_inited_server_for_language(lang) {
+            Some(s) => s,
+            None => return,
+        };
+        let uri = match path_to_uri(Path::new(file_path)) {
+            Some(u) => u,
+            None => return,
+        };
+        server
+            .send_notification::<DidCloseTextDocument>(DidCloseTextDocumentParams {
+                text_document: TextDocumentIdentifier { uri },
+            })
+            .ok();
     }
 
     fn system_copy(&mut self, cut: bool) {
