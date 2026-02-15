@@ -4,6 +4,7 @@ use crate::action::{EditorAction, EditorEffect, PickerKind};
 use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::layout::{LayoutNode, SplitDirection};
+use crate::lsp::LspIncoming;
 use crate::picker::{Picker, PickerItem};
 use crate::text_grid;
 use crate::vim::VimLayer;
@@ -55,7 +56,7 @@ pub enum Message {
         cols: usize,
         window_id: usize,
     },
-    LspMessage {
+    Lsp {
         server_id: usize,
         message: String,
     },
@@ -78,14 +79,13 @@ impl Recipe for LspSubscription {
         let rx = self.rx;
         let server_id = self.server_id;
         Box::pin(iced::stream::channel(100, async move |mut output| {
-            loop {
-                match rx.recv().await {
-                    Ok(message) => {
-                        output
-                            .send(Message::LspMessage { server_id, message })
-                            .await;
+            while let Ok(message) = rx.recv().await {
+                match output.send(Message::Lsp { server_id, message }).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        debug!(error = ?e, server_id, "LSP subscription output channel closed");
+                        break;
                     }
-                    Err(_) => break,
                 }
             }
         }))
@@ -294,7 +294,28 @@ impl Remax {
                     self.editor.ensure_cursor_visible();
                 }
             }
-            Message::LspMessage { server_id, message } => {
+            Message::Lsp { server_id, message } => {
+                if let Some(incoming) = self
+                    .editor
+                    .workspace()
+                    .lsp_manager
+                    .handle_message(server_id, &message)
+                {
+                    match incoming {
+                        LspIncoming::Response { id, result } => {
+                            debug!(id, "got response");
+                        }
+                        LspIncoming::Notification { method, params } => {
+                            debug!(method, "got notification");
+                        }
+                        LspIncoming::ServerRequest { id, method, params } => {
+                            debug!(id, method, "got server request");
+                        }
+                        LspIncoming::Error { id, error } => {
+                            debug!(id, error = ?error, "got error response");
+                        }
+                    }
+                }
                 debug!(server_id, message, "LSP message received in update");
             }
         }

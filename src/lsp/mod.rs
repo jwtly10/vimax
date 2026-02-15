@@ -10,8 +10,24 @@ use smol::{
 };
 use tracing::{debug, info};
 
-pub struct LspManager {
-    pub servers: Vec<LspServer>,
+pub enum LspIncoming {
+    Response {
+        id: i64,
+        result: serde_json::Value,
+    },
+    Error {
+        id: i64,
+        error: serde_json::Value,
+    },
+    Notification {
+        method: String,
+        params: serde_json::Value,
+    },
+    ServerRequest {
+        id: i64,
+        method: String,
+        params: serde_json::Value,
+    },
 }
 
 pub struct LspServer {
@@ -27,6 +43,10 @@ pub struct LspServer {
 struct LspConfig {
     cmd: String,
     args: Vec<String>,
+}
+
+pub struct LspManager {
+    pub servers: Vec<LspServer>,
 }
 
 impl LspManager {
@@ -113,7 +133,6 @@ impl LspManager {
                     return;
                 }
                 let body = String::from_utf8_lossy(&body).to_string();
-                debug!(?body, "received message from LSP server");
                 tx.send(body).await.unwrap();
             }
         })
@@ -151,6 +170,34 @@ impl LspManager {
         .detach();
 
         self.servers.push(server);
+    }
+    pub fn handle_message(&self, server_id: usize, raw: &str) -> Option<LspIncoming> {
+        let json: serde_json::Value = serde_json::from_str(raw).ok()?;
+
+        if let Some(id) = json.get("id") {
+            if let Some(method) = json.get("method") {
+                Some(LspIncoming::ServerRequest {
+                    id: id.as_i64()?,
+                    method: method.as_str()?.to_string(),
+                    params: json.get("params").cloned().unwrap_or_default(),
+                })
+            } else if json.get("error").is_some() {
+                Some(LspIncoming::Error {
+                    id: id.as_i64()?,
+                    error: json["error"].clone(),
+                })
+            } else {
+                Some(LspIncoming::Response {
+                    id: id.as_i64()?,
+                    result: json.get("result").cloned().unwrap_or_default(),
+                })
+            }
+        } else {
+            Some(LspIncoming::Notification {
+                method: json.get("method")?.as_str()?.to_string(),
+                params: json.get("params").cloned().unwrap_or_default(),
+            })
+        }
     }
 }
 
