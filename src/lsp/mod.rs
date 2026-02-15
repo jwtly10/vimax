@@ -13,6 +13,43 @@ use smol::{
 };
 use tracing::{debug, info};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Language {
+    Rust,
+}
+
+impl Language {
+    /// Gets the LSP compatible language ID
+    pub fn id(&self) -> &'static str {
+        match self {
+            Language::Rust => "rust",
+        }
+    }
+    // Parse a language from a file path, returning None if the extension is not recognized or missing
+    pub fn from_path(path: &Path) -> Option<Self> {
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .and_then(Self::from_extension)
+    }
+
+    // Parse a language from a file extension, returning None if it's not recognized
+    fn from_extension(ext: &str) -> Option<Self> {
+        match ext {
+            "rs" => Some(Language::Rust),
+            _ => None,
+        }
+    }
+
+    pub fn get_lsp_config(&self) -> LspConfig {
+        match self {
+            Language::Rust => LspConfig {
+                cmd: "rust-analyzer".to_string(),
+                args: vec![],
+            },
+        }
+    }
+}
+
 pub enum LspIncoming {
     Response {
         id: i64,
@@ -35,7 +72,7 @@ pub enum LspIncoming {
 
 pub struct LspServer {
     pub id: usize,
-    language_id: String,
+    language: Language,
     _process: Child,
     stdin: Arc<Mutex<ChildStdin>>,
     pub rx: Receiver<String>,
@@ -44,7 +81,7 @@ pub struct LspServer {
     pub initialized: bool,
 }
 
-struct LspConfig {
+pub struct LspConfig {
     cmd: String,
     args: Vec<String>,
 }
@@ -116,24 +153,24 @@ impl LspManager {
         }
     }
 
-    pub fn get_inited_server_for_language(&self, language_id: &str) -> Option<&LspServer> {
+    pub fn get_inited_server_for_language(&self, language: Language) -> Option<&LspServer> {
         self.servers
             .iter()
-            .find(|s| s.language_id == language_id && s.initialized)
+            .find(|s| s.language == language && s.initialized)
     }
 
     pub fn take_pending_request(&mut self, id: i64) -> Option<PendingRequest> {
         self.pending_requests.remove(&id)
     }
 
-    pub fn start_server(&mut self, language_id: &str, root_path: &Path) {
-        if self.servers.iter().any(|s| s.language_id == language_id) {
-            info!(language_id, "LSP server already running");
+    pub fn start_server(&mut self, language: Language, root_path: &Path) {
+        if self.servers.iter().any(|s| s.language == language) {
+            info!(?language, "LSP server already running");
             return;
         }
 
-        info!(?language_id, ?root_path, "starting LSP server from root");
-        let lsp_config = get_config(language_id).expect("Unsupported language");
+        info!(?language, ?root_path, "starting LSP server from root");
+        let lsp_config = language.get_lsp_config();
         let mut process = Command::new(lsp_config.cmd)
             .args(lsp_config.args)
             .stdin(Stdio::piped())
@@ -150,7 +187,7 @@ impl LspManager {
         let server_id = self.servers.len();
         let server = LspServer {
             id: server_id,
-            language_id: language_id.to_string(),
+            language,
             _process: process,
             stdin: Arc::new(Mutex::new(stdin)),
             root_uri,
@@ -300,16 +337,6 @@ impl LspManager {
     }
 }
 
-fn get_config(language_id: &str) -> Option<LspConfig> {
-    match language_id {
-        "rust" => Some(LspConfig {
-            cmd: "rust-analyzer".to_string(),
-            args: vec![],
-        }),
-        _ => None,
-    }
-}
-
 /// Convert rope char offset to LSP Position (0-indexed line, 0-indexed UTF-16 column).
 pub fn offset_to_lsp_position(rope: &ropey::Rope, offset: usize) -> lsp_types::Position {
     let line = rope.char_to_line(offset);
@@ -349,15 +376,4 @@ pub fn path_to_uri(path: &Path) -> Option<lsp_types::Uri> {
     let abs = std::fs::canonicalize(path).ok()?;
     let uri_str = format!("file://{}", abs.display());
     uri_str.parse().ok()
-}
-
-pub fn detect_language_from_path(path: &Path) -> Option<String> {
-    if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
-        match ext {
-            "rs" => Some("rust".to_string()),
-            _ => None,
-        }
-    } else {
-        None
-    }
 }

@@ -4,7 +4,7 @@ use crate::action::{EditorAction, EditorEffect, PickerKind};
 use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::layout::{LayoutNode, SplitDirection};
-use crate::lsp::{LspIncoming, detect_language_from_path, lsp_position_to_offset};
+use crate::lsp::{Language, LspIncoming, lsp_position_to_offset};
 use crate::picker::{Picker, PickerItem};
 use crate::text_grid;
 use crate::vim::VimLayer;
@@ -337,7 +337,7 @@ impl Remax {
 
                                                 if let Some(file_path) = buf.file_path() {
                                                     let path = Path::new(file_path);
-                                                    let lang = detect_language_from_path(path);
+                                                    let lang = Language::from_path(path);
                                                     if let Some(lang) = lang
                                                         && let Some(uri) =
                                                             crate::lsp::path_to_uri(path)
@@ -347,12 +347,12 @@ impl Remax {
                                                             .editor
                                                             .workspace()
                                                             .lsp_manager
-                                                            .get_inited_server_for_language(&lang)
+                                                            .get_inited_server_for_language(lang)
                                                         {
                                                             server.send_notification::<DidOpenTextDocument>(DidOpenTextDocumentParams {
                                                                 text_document: lsp_types::TextDocumentItem {
                                                                     uri,
-                                                                    language_id: lang,
+                                                                    language_id: lang.id().to_string(),
                                                                     version: 0,
                                                                     text,
                                                                 },

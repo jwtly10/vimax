@@ -11,7 +11,7 @@ use tracing::{debug, error, info};
 use crate::action::{EditorAction, EditorEffect, Motion, Range};
 use crate::buffer::Buffer;
 use crate::layout::SplitDirection;
-use crate::lsp::{detect_language_from_path, path_to_uri};
+use crate::lsp::{offset_to_lsp_position, path_to_uri};
 use crate::registers::Registers;
 use crate::syntax::SyntaxState;
 use crate::syntax::loader::Loader;
@@ -131,53 +131,56 @@ impl Editor {
             return;
         }
 
-        let lang = detect_language_from_path(path);
-        if let Some(ref lang) = lang {
-            debug!(
-                path = path_str,
-                language = lang,
-                "detected language for file, starting lsp if available"
-            );
-            let cwd = self.workspace().cwd.clone();
-            self.workspace_mut()
-                .lsp_manager
-                .start_server(lang, cwd.as_path());
-        } else {
-            info!(path = path_str, "could not detect language for file");
-        }
-
         let buf_name = path
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
+
         match std::fs::read_to_string(path) {
             Ok(content) => {
                 let buffer = Buffer::from_str(&content, &buf_name, path, false);
                 let syntax = Self::create_syntax_for_buffer(&buffer, &self.loader);
                 let buf_id = self.buffers.len();
+                let lang = buffer.language();
                 self.buffers.push(buffer);
                 self.syntax_states.push(syntax);
                 self.workspace_mut().reset_window_for_buffer(buf_id);
                 self.status_message = format!("\"{}\"", path.display());
 
-                if let Some(lang) = lang
-                    && let Some(server) = self
+                if let Some(lang) = lang {
+                    debug!(?path_str, ?lang, "buffer has language, starting lsp");
+
+                    let cwd = self.workspace().cwd.clone();
+
+                    // Starts the LSP if not already running
+                    self.workspace_mut()
+                        .lsp_manager
+                        .start_server(lang, cwd.as_path());
+
+                    // If a server is already running for this language, send DidOpenTextDocument notification
+                    if let Some(server) = self
                         .workspace()
                         .lsp_manager
-                        .get_inited_server_for_language(&lang)
-                    && let Some(uri) = path_to_uri(path)
-                {
-                    server
-                        .send_notification::<DidOpenTextDocument>(DidOpenTextDocumentParams {
-                            text_document: TextDocumentItem {
-                                uri,
-                                language_id: lang,
-                                version: 0,
-                                text: content,
-                            },
-                        })
-                        .expect("Failed to send DidOpenTextDocument notification to LSP server");
+                        .get_inited_server_for_language(lang)
+                    {
+                        if let Some(uri) = path_to_uri(path) {
+                            server
+                                .send_notification::<DidOpenTextDocument>(
+                                    DidOpenTextDocumentParams {
+                                        text_document: TextDocumentItem {
+                                            uri,
+                                            language_id: lang.id().to_string(),
+                                            version: 0,
+                                            text: content.clone(),
+                                        },
+                                    },
+                                )
+                                .expect(
+                                    "Failed to send DidOpenTextDocument notification to LSP server",
+                                );
+                        }
+                    }
                 }
             }
             Err(e) => {
@@ -517,16 +520,15 @@ impl Editor {
                 let buf = self.buffer();
                 let cursor = self.cursor();
                 if let Some(file_path) = buf.file_path() {
-                    let position = crate::lsp::offset_to_lsp_position(buf.rope(), cursor);
-                    let path = std::path::Path::new(file_path);
-                    let lang = detect_language_from_path(path);
-                    if let Some(lang) = lang
+                    let position = offset_to_lsp_position(buf.rope(), cursor);
+                    let path = Path::new(file_path);
+                    if let Some(lang) = buf.language()
                         && let Some(uri) = crate::lsp::path_to_uri(path)
                     {
                         if let Some(server) = self
                             .workspace()
                             .lsp_manager
-                            .get_inited_server_for_language(&lang)
+                            .get_inited_server_for_language(lang)
                         {
                             let server_id = server.id;
                             self.workspace_mut()
