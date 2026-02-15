@@ -4,7 +4,7 @@ use crate::action::{EditorAction, EditorEffect, PickerKind};
 use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::layout::{LayoutNode, SplitDirection};
-use crate::lsp::{Language, LspIncoming, lsp_position_to_offset};
+use crate::lsp::{LspIncoming, lsp_position_to_offset};
 use crate::picker::{Picker, PickerItem};
 use crate::text_grid;
 use crate::vim::VimLayer;
@@ -332,34 +332,33 @@ impl Remax {
                                                 .is_ok()
                                             {
                                                 server.initialized = true;
+                                                let server_lang = server.language;
 
-                                                let buf = self.editor.buffer();
-
-                                                if let Some(file_path) = buf.file_path() {
-                                                    let path = Path::new(file_path);
-                                                    let lang = Language::from_path(path);
-                                                    if let Some(lang) = lang
-                                                        && let Some(uri) =
-                                                            crate::lsp::path_to_uri(path)
+                                                for buf in &self.editor.buffers {
+                                                    if buf.language() != Some(server_lang) {
+                                                        continue;
+                                                    }
+                                                    if let Some(file_path) = buf.file_path()
+                                                        && let Some(uri) = crate::lsp::path_to_uri(Path::new(file_path))
                                                     {
                                                         let text = buf.rope().to_string();
                                                         if let Some(server) = self
                                                             .editor
                                                             .workspace()
                                                             .lsp_manager
-                                                            .get_inited_server_for_language(lang)
+                                                            .get_inited_server_for_language(server_lang)
                                                         {
                                                             server.send_notification::<DidOpenTextDocument>(DidOpenTextDocumentParams {
                                                                 text_document: lsp_types::TextDocumentItem {
                                                                     uri,
-                                                                    language_id: lang.id().to_string(),
+                                                                    language_id: server_lang.id().to_string(),
                                                                     version: 0,
                                                                     text,
                                                                 },
                                                             }).ok();
                                                         }
                                                     }
-                                                };
+                                                }
                                             }
                                         }
                                     }

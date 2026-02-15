@@ -163,23 +163,20 @@ impl Editor {
                         .workspace()
                         .lsp_manager
                         .get_inited_server_for_language(lang)
+                        && let Some(uri) = path_to_uri(path)
                     {
-                        if let Some(uri) = path_to_uri(path) {
-                            server
-                                .send_notification::<DidOpenTextDocument>(
-                                    DidOpenTextDocumentParams {
-                                        text_document: TextDocumentItem {
-                                            uri,
-                                            language_id: lang.id().to_string(),
-                                            version: 0,
-                                            text: content.clone(),
-                                        },
-                                    },
-                                )
-                                .expect(
-                                    "Failed to send DidOpenTextDocument notification to LSP server",
-                                );
-                        }
+                        server
+                            .send_notification::<DidOpenTextDocument>(DidOpenTextDocumentParams {
+                                text_document: TextDocumentItem {
+                                    uri,
+                                    language_id: lang.id().to_string(),
+                                    version: 0,
+                                    text: content.clone(),
+                                },
+                            })
+                            .expect(
+                                "Failed to send DidOpenTextDocument notification to LSP server",
+                            );
                     }
                 }
             }

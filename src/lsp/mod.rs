@@ -72,7 +72,7 @@ pub enum LspIncoming {
 
 pub struct LspServer {
     pub id: usize,
-    language: Language,
+    pub language: Language,
     _process: Child,
     stdin: Arc<Mutex<ChildStdin>>,
     pub rx: Receiver<String>,
