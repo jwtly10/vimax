@@ -313,6 +313,47 @@ fn get_config(language_id: &str) -> Option<LspConfig> {
     }
 }
 
+/// Convert rope char offset to LSP Position (0-indexed line, 0-indexed UTF-16 column).
+pub fn offset_to_lsp_position(rope: &ropey::Rope, offset: usize) -> lsp_types::Position {
+    let line = rope.char_to_line(offset);
+    let line_start = rope.line_to_char(line);
+    let col_chars = offset - line_start;
+    // Convert char offset to UTF-16 code units
+    let utf16_col: usize = rope
+        .line(line)
+        .chars()
+        .take(col_chars)
+        .map(|c| c.len_utf16())
+        .sum();
+    lsp_types::Position::new(line as u32, utf16_col as u32)
+}
+
+/// Convert LSP Position to rope char offset.
+pub fn lsp_position_to_offset(rope: &ropey::Rope, pos: &lsp_types::Position) -> usize {
+    let line = pos.line as usize;
+    if line >= rope.len_lines() {
+        return rope.len_chars();
+    }
+    let line_start = rope.line_to_char(line);
+    let mut utf16_count = 0u32;
+    let mut char_count = 0usize;
+    for ch in rope.line(line).chars() {
+        if utf16_count >= pos.character {
+            break;
+        }
+        utf16_count += ch.len_utf16() as u32;
+        char_count += 1;
+    }
+    line_start + char_count
+}
+
+/// Build a file:// URI from a path, canonicalizing to absolute.
+pub fn path_to_uri(path: &Path) -> Option<lsp_types::Uri> {
+    let abs = std::fs::canonicalize(path).ok()?;
+    let uri_str = format!("file://{}", abs.display());
+    uri_str.parse().ok()
+}
+
 pub fn detect_language_from_path(path: &Path) -> Option<String> {
     if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
         match ext {

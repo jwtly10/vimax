@@ -4,7 +4,7 @@ use crate::action::{EditorAction, EditorEffect, PickerKind};
 use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::layout::{LayoutNode, SplitDirection};
-use crate::lsp::{LspIncoming, detect_language_from_path};
+use crate::lsp::{LspIncoming, detect_language_from_path, lsp_position_to_offset};
 use crate::picker::{Picker, PickerItem};
 use crate::text_grid;
 use crate::vim::VimLayer;
@@ -336,12 +336,12 @@ impl Remax {
                                                 let buf = self.editor.buffer();
 
                                                 if let Some(file_path) = buf.file_path() {
-                                                    let lang = detect_language_from_path(
-                                                        Path::new(file_path),
-                                                    );
-                                                    if let Some(lang) = lang {
-                                                        let file_uri_str =
-                                                            format!("file://{}", file_path);
+                                                    let path = Path::new(file_path);
+                                                    let lang = detect_language_from_path(path);
+                                                    if let Some(lang) = lang
+                                                        && let Some(uri) =
+                                                            crate::lsp::path_to_uri(path)
+                                                    {
                                                         let text = buf.rope().to_string();
                                                         if let Some(server) = self
                                                             .editor
@@ -351,7 +351,7 @@ impl Remax {
                                                         {
                                                             server.send_notification::<DidOpenTextDocument>(DidOpenTextDocumentParams {
                                                                 text_document: lsp_types::TextDocumentItem {
-                                                                    uri: file_uri_str.parse().unwrap(),
+                                                                    uri,
                                                                     language_id: lang,
                                                                     version: 0,
                                                                     text,
@@ -365,6 +365,7 @@ impl Remax {
                                     }
                                     "textDocument/definition" => {
                                         debug!(?result, "definition response");
+                                        self.handle_definition_response(result);
                                     }
                                     _ => {
                                         debug!(method = %pending.method, "response matched pending request");
@@ -500,6 +501,54 @@ impl Remax {
                 ..Default::default()
             })
             .into()
+    }
+
+    /// https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_definition
+    fn handle_definition_response(&mut self, result: serde_json::Value) {
+        // Response can be: null, Location, Location[], LocationLink[]
+        let location: Option<lsp_types::Location> = if result.is_null() {
+            None
+        } else if result.get("uri").is_some() {
+            serde_json::from_value(result).ok()
+        } else if let Some(arr) = result.as_array() {
+            if let Some(first) = arr.first() {
+                if first.get("targetUri").is_some() {
+                    let link: Option<lsp_types::LocationLink> =
+                        serde_json::from_value(first.clone()).ok();
+                    link.map(|l| lsp_types::Location {
+                        uri: l.target_uri,
+                        range: l.target_selection_range,
+                    })
+                } else {
+                    serde_json::from_value(first.clone()).ok()
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(location) = location {
+            let path_str = location.uri.path().to_string();
+            debug!(uri = ?location.uri, path = %path_str, line = location.range.start.line, col = location.range.start.character, "jumping to definition");
+            let path = std::path::Path::new(&path_str);
+
+            self.editor.open_file(path);
+
+            let buf = self.editor.buffer();
+            let offset = lsp_position_to_offset(buf.rope(), &location.range.start);
+            self.editor.window_mut().cursor = buf.clamp_cursor(offset);
+            self.editor.ensure_cursor_visible();
+            self.editor.status_message = format!(
+                "Definition: {}:{}:{}",
+                path.display(),
+                location.range.start.line + 1,
+                location.range.start.character + 1
+            );
+        } else {
+            self.editor.status_message = String::from("No definition found");
+        }
     }
 
     fn open_picker(&mut self, kind: PickerKind) {

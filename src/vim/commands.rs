@@ -112,6 +112,8 @@ pub fn resolve(
             vec![]
         }
 
+        "lsp.goto_definition" => vec![EditorAction::LspGotoDefinition],
+
         "picker.buffers" => input.open_buffer_picker(),
         "picker.project_files" => input.open_project_files_picker(false),
         "picker.project_files_show_ignored" => input.open_project_files_picker(true),

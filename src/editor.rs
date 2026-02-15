@@ -1,7 +1,11 @@
 use std::path::{Path, PathBuf};
 
 use lsp_types::notification::DidOpenTextDocument;
-use lsp_types::{DidOpenTextDocumentParams, TextDocumentItem};
+use lsp_types::request::GotoDefinition;
+use lsp_types::{
+    DidOpenTextDocumentParams, GotoDefinitionParams, TextDocumentIdentifier, TextDocumentItem,
+    TextDocumentPositionParams,
+};
 use tracing::{debug, error, info};
 
 use crate::action::{EditorAction, EditorEffect, Motion, Range};
@@ -12,6 +16,7 @@ use crate::registers::Registers;
 use crate::syntax::SyntaxState;
 use crate::syntax::loader::Loader;
 use crate::vim::mode::VimMode;
+use crate::window::Window;
 use crate::workspace::Workspace;
 
 pub struct Editor {
@@ -79,7 +84,7 @@ impl Editor {
         &mut self.workspaces[self.active_workspace]
     }
 
-    pub fn window_mut(&mut self) -> &mut crate::window::Window {
+    pub fn window_mut(&mut self) -> &mut Window {
         self.workspaces[self.active_workspace].window_mut()
     }
 
@@ -161,12 +166,12 @@ impl Editor {
                         .workspace()
                         .lsp_manager
                         .get_inited_server_for_language(&lang)
+                    && let Some(uri) = crate::lsp::path_to_uri(path)
                 {
-                    let file_uri_str = format!("file://{}", path.display());
                     server
                         .send_notification::<DidOpenTextDocument>(DidOpenTextDocumentParams {
                             text_document: TextDocumentItem {
-                                uri: file_uri_str.parse().unwrap(),
+                                uri,
                                 language_id: lang,
                                 version: 0,
                                 text: content,
@@ -507,6 +512,41 @@ impl Editor {
             }
             EditorAction::SystemPaste => {
                 self.system_paste();
+            }
+            EditorAction::LspGotoDefinition => {
+                let buf = self.buffer();
+                let cursor = self.cursor();
+                if let Some(file_path) = buf.file_path() {
+                    let position = crate::lsp::offset_to_lsp_position(buf.rope(), cursor);
+                    let path = std::path::Path::new(file_path);
+                    let lang = detect_language_from_path(path);
+                    if let Some(lang) = lang
+                        && let Some(uri) = crate::lsp::path_to_uri(path)
+                    {
+                        if let Some(server) = self
+                            .workspace()
+                            .lsp_manager
+                            .get_inited_server_for_language(&lang)
+                        {
+                            let server_id = server.id;
+                            self.workspace_mut()
+                                .lsp_manager
+                                .send_request::<GotoDefinition>(
+                                    server_id,
+                                    GotoDefinitionParams {
+                                        text_document_position_params: TextDocumentPositionParams {
+                                            text_document: TextDocumentIdentifier { uri },
+                                            position,
+                                        },
+                                        work_done_progress_params: Default::default(),
+                                        partial_result_params: Default::default(),
+                                    },
+                                );
+                        } else {
+                            self.status_message = String::from("LSP not ready");
+                        }
+                    }
+                }
             }
             EditorAction::OpenPicker(_) => {
                 // Handled by app layer, not editor
