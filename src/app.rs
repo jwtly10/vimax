@@ -374,13 +374,13 @@ impl Remax {
                             }
                         }
                         LspIncoming::Notification { method, params } => {
-                            debug!(method, "got notification");
+                            debug!(?method, ?params, "got notification");
                         }
                         LspIncoming::ServerRequest { id, method, params } => {
-                            debug!(id, method, "got server request");
+                            debug!(?id, ?method, ?params, "got server request");
                         }
                         LspIncoming::Error { id, error } => {
-                            debug!(id, error = ?error, "got error response");
+                            debug!(id, ?error, "got error response");
                         }
                     }
                 }

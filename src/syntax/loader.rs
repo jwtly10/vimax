@@ -22,7 +22,7 @@ impl Loader {
         )
         .expect("Failed to create Rust language config");
 
-        rust_config.configure(|name| capture_name_to_highlight(name));
+        rust_config.configure(capture_name_to_highlight);
 
         let rust = Language::new(0);
         Loader {
@@ -39,6 +39,7 @@ impl Loader {
 impl LanguageLoader for Loader {
     fn language_for_marker(&self, marker: InjectionLanguageMarker) -> Option<Language> {
         match marker {
+            #[allow(clippy::collapsible_match)]
             InjectionLanguageMarker::Name(name) => match name {
                 "rust" => Some(Language::new(0)),
                 _ => None,

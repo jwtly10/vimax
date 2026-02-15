@@ -3,8 +3,7 @@ use std::{collections::HashMap, path::Path, process::Stdio, sync::Arc};
 use async_process::{Child, ChildStdin, Command};
 use lsp_types::{
     ClientCapabilities, ClientInfo, InitializeParams, ServerCapabilities, Uri,
-    notification::Notification,
-    request::{Initialize, Request},
+    notification::Notification, request::Request,
 };
 use smol::{
     channel::{Receiver, unbounded},
@@ -37,7 +36,7 @@ pub enum LspIncoming {
 pub struct LspServer {
     pub id: usize,
     language_id: String,
-    process: Child,
+    _process: Child,
     stdin: Arc<Mutex<ChildStdin>>,
     pub rx: Receiver<String>,
     root_uri: Uri, // TODO: This should be set dynamically based on the nearest toml or something per language & fallback to workspace
@@ -57,7 +56,6 @@ pub struct LspManager {
 }
 
 pub struct PendingRequest {
-    pub server_id: usize,
     pub method: String,
 }
 
@@ -153,7 +151,7 @@ impl LspManager {
         let server = LspServer {
             id: server_id,
             language_id: language_id.to_string(),
-            process,
+            _process: process,
             stdin: Arc::new(Mutex::new(stdin)),
             root_uri,
             rx,
@@ -212,6 +210,7 @@ impl LspManager {
 
         let init_params = InitializeParams {
             process_id: Some(std::process::id()),
+            #[allow(deprecated)]
             root_uri: Some(server.root_uri.clone()), // TODO: Should be using workspace_folders ?
             capabilities: ClientCapabilities::default(),
             client_info: Some(ClientInfo {
@@ -225,7 +224,6 @@ impl LspManager {
         self.pending_requests.insert(
             req_id,
             PendingRequest {
-                server_id,
                 method: "initialize".to_string(),
             },
         );
@@ -294,7 +292,6 @@ impl LspManager {
         self.pending_requests.insert(
             request_id,
             PendingRequest {
-                server_id,
                 method: R::METHOD.to_string(),
             },
         );

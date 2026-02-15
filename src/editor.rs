@@ -11,7 +11,7 @@ use tracing::{debug, error, info};
 use crate::action::{EditorAction, EditorEffect, Motion, Range};
 use crate::buffer::Buffer;
 use crate::layout::SplitDirection;
-use crate::lsp::detect_language_from_path;
+use crate::lsp::{detect_language_from_path, path_to_uri};
 use crate::registers::Registers;
 use crate::syntax::SyntaxState;
 use crate::syntax::loader::Loader;
@@ -55,10 +55,10 @@ impl Editor {
             .and_then(|p| std::path::Path::new(p).extension())
             .and_then(|e| e.to_str());
 
-        if let Some(ext) = ext {
-            if let Some(lang) = loader.language_for_extension(ext) {
-                return SyntaxState::new(buffer.rope(), lang, loader);
-            }
+        if let Some(ext) = ext
+            && let Some(lang) = loader.language_for_extension(ext)
+        {
+            return SyntaxState::new(buffer.rope(), lang, loader);
         }
         None
     }
@@ -67,11 +67,11 @@ impl Editor {
         let ws = &self.workspaces[self.active_workspace];
         for win in &ws.windows {
             let buf_id = win.buffer_id;
-            if buf_id < self.syntax_states.len() {
-                if let Some(state) = &mut self.syntax_states[buf_id] {
-                    let version = self.buffers[buf_id].version();
-                    state.ensure_parsed(self.buffers[buf_id].rope(), version, &self.loader);
-                }
+            if buf_id < self.syntax_states.len()
+                && let Some(state) = &mut self.syntax_states[buf_id]
+            {
+                let version = self.buffers[buf_id].version();
+                state.ensure_parsed(self.buffers[buf_id].rope(), version, &self.loader);
             }
         }
     }
@@ -166,7 +166,7 @@ impl Editor {
                         .workspace()
                         .lsp_manager
                         .get_inited_server_for_language(&lang)
-                    && let Some(uri) = crate::lsp::path_to_uri(path)
+                    && let Some(uri) = path_to_uri(path)
                 {
                     server
                         .send_notification::<DidOpenTextDocument>(DidOpenTextDocumentParams {
