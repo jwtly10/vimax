@@ -1,14 +1,10 @@
-use std::{
-    path::{Path, PathBuf},
-    process::Stdio,
-    sync::Arc,
-};
+use std::{path::Path, process::Stdio, sync::Arc};
 
 use async_process::{Child, ChildStdin, Command};
 use lsp_types::{ClientCapabilities, ClientInfo, InitializeParams, Uri};
 use smol::{
     channel::{Receiver, unbounded},
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     lock::Mutex,
     spawn,
 };
@@ -56,7 +52,7 @@ impl LspManager {
             .expect("Failed to start LSP server");
 
         let stdin = process.stdin.take().unwrap();
-        let mut stdout = process.stdout.take().unwrap();
+        let stdout = process.stdout.take().unwrap();
         let (tx, rx) = unbounded();
 
         let root_uri_str = format!("file://{}", root_path.display());
@@ -74,23 +70,55 @@ impl LspManager {
         };
 
         spawn(async move {
-            let mut buffer = [0; 1024];
+            let mut reader = BufReader::new(stdout);
+            let mut header_buf = String::new();
+
             loop {
-                match stdout.read(&mut buffer).await {
-                    Ok(n) if n > 0 => {
-                        let output = String::from_utf8_lossy(&buffer[..n]).to_string();
-                        debug!(output, "LSP server output");
-                        tx.send(output).await.unwrap();
-                    }
-                    Ok(_) => break, // EOF
-                    Err(e) => {
-                        eprintln!("Error reading from LSP server: {}", e);
-                        break;
+                let mut content_length: Option<usize> = None;
+                loop {
+                    header_buf.clear();
+
+                    match reader.read_line(&mut header_buf).await {
+                        Ok(0) => return, // EOF
+                        Ok(_) => {
+                            debug!(raw_header = ?header_buf, "header line");
+                            // Parsing the content length header
+                            let line = header_buf.trim();
+                            if line.is_empty() {
+                                break; // blank line = end of header
+                            }
+
+                            if let Some(len_str) = line.strip_prefix("Content-Length:") {
+                                content_length = len_str.trim().parse().ok()
+                            }
+                        }
+                        Err(e) => {
+                            debug!(?e, "error reading from LSP server stdout");
+                            return;
+                        }
                     }
                 }
+
+                let content_length = match content_length {
+                    Some(len) => len,
+                    None => {
+                        debug!("missing Content-Length header");
+                        continue;
+                    }
+                };
+
+                let mut body = vec![0u8; content_length];
+                if reader.read_exact(&mut body).await.is_err() {
+                    debug!("lsp stdout EOF during body read");
+                    return;
+                }
+                let body = String::from_utf8_lossy(&body).to_string();
+                debug!(?body, "received message from LSP server");
+                tx.send(body).await.unwrap();
             }
         })
         .detach();
+
         let init_params = InitializeParams {
             process_id: Some(std::process::id()),
             root_uri: Some(server.root_uri.clone()), // TODO: Should be using workspace_folders ?
