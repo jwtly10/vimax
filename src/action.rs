@@ -10,6 +10,7 @@ pub enum PickerKind {
         show_ignored: bool,
         max_results: usize,
     },
+    Locations,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +90,9 @@ pub enum EditorAction {
     ForceQuitApp,
     OpenPicker(PickerKind),
     LspGotoDefinition,
+    LspReferences,
+    LspImplementation,
+    LspDeclaration,
     JumpBackward,
     JumpForward,
 }

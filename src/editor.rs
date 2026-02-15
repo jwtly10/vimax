@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use lsp_types::notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument};
-use lsp_types::request::GotoDefinition;
+use lsp_types::request::{GotoDeclaration, GotoDefinition, GotoImplementation, References, Request};
 use lsp_types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DidSaveTextDocumentParams, GotoDefinitionParams, TextDocumentContentChangeEvent,
-    TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams,
-    VersionedTextDocumentIdentifier,
+    DidSaveTextDocumentParams, GotoDefinitionParams, ReferenceContext, ReferenceParams,
+    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
+    TextDocumentPositionParams, VersionedTextDocumentIdentifier,
 };
 use tracing::{debug, error, info};
 
@@ -599,6 +599,10 @@ impl Editor {
             }
             EditorAction::LspGotoDefinition => {
                 self.push_jump();
+                self.send_lsp_position_request::<GotoDefinition>("LSP not ready");
+            }
+            EditorAction::LspReferences => {
+                self.push_jump();
                 let buf = self.buffer();
                 let cursor = self.cursor();
                 if let Some(file_path) = buf.file_path() {
@@ -615,15 +619,18 @@ impl Editor {
                             let server_id = server.id;
                             self.workspace_mut()
                                 .lsp_manager
-                                .send_request::<GotoDefinition>(
+                                .send_request::<References>(
                                     server_id,
-                                    GotoDefinitionParams {
-                                        text_document_position_params: TextDocumentPositionParams {
+                                    ReferenceParams {
+                                        text_document_position: TextDocumentPositionParams {
                                             text_document: TextDocumentIdentifier { uri },
                                             position,
                                         },
                                         work_done_progress_params: Default::default(),
                                         partial_result_params: Default::default(),
+                                        context: ReferenceContext {
+                                            include_declaration: true,
+                                        },
                                     },
                                 );
                         } else {
@@ -631,6 +638,14 @@ impl Editor {
                         }
                     }
                 }
+            }
+            EditorAction::LspImplementation => {
+                self.push_jump();
+                self.send_lsp_position_request::<GotoImplementation>("LSP not ready");
+            }
+            EditorAction::LspDeclaration => {
+                self.push_jump();
+                self.send_lsp_position_request::<GotoDeclaration>("LSP not ready");
             }
             EditorAction::JumpBackward => {
                 self.jump_backward();
@@ -646,6 +661,42 @@ impl Editor {
             self.notify_lsp_did_change();
         }
         EditorEffect::None
+    }
+
+    fn send_lsp_position_request<R: Request<Params = GotoDefinitionParams>>(
+        &mut self,
+        not_ready_msg: &str,
+    ) {
+        let buf = self.buffer();
+        let cursor = self.cursor();
+        if let Some(file_path) = buf.file_path() {
+            let position = offset_to_lsp_position(buf.rope(), cursor);
+            let path = Path::new(file_path);
+            if let Some(lang) = buf.language()
+                && let Some(uri) = crate::lsp::path_to_uri(path)
+            {
+                if let Some(server) = self
+                    .workspace()
+                    .lsp_manager
+                    .get_inited_server_for_language(lang)
+                {
+                    let server_id = server.id;
+                    self.workspace_mut().lsp_manager.send_request::<R>(
+                        server_id,
+                        GotoDefinitionParams {
+                            text_document_position_params: TextDocumentPositionParams {
+                                text_document: TextDocumentIdentifier { uri },
+                                position,
+                            },
+                            work_done_progress_params: Default::default(),
+                            partial_result_params: Default::default(),
+                        },
+                    );
+                } else {
+                    self.status_message = String::from(not_ready_msg);
+                }
+            }
+        }
     }
 
     fn notify_lsp_did_change(&self) {

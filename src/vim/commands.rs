@@ -113,6 +113,9 @@ pub fn resolve(
         }
 
         "lsp.goto_definition" => vec![EditorAction::LspGotoDefinition],
+        "lsp.references" => vec![EditorAction::LspReferences],
+        "lsp.implementation" => vec![EditorAction::LspImplementation],
+        "lsp.declaration" => vec![EditorAction::LspDeclaration],
 
         "picker.buffers" => input.open_buffer_picker(),
         "picker.project_files" => input.open_project_files_picker(false),

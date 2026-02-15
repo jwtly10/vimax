@@ -1,11 +1,21 @@
+use std::path::PathBuf;
+
 use nucleo_matcher::{
     Config, Matcher, Utf32Str,
     pattern::{CaseMatching, Normalization, Pattern},
 };
 
+#[derive(Debug, Clone)]
+pub struct Location {
+    pub path: PathBuf,
+    pub line: usize,
+    pub col: usize,
+}
+
 pub struct PickerItem {
     pub id: usize,
     pub label: String,
+    pub location: Option<Location>,
 }
 
 pub const PICKER_VISIBLE_LIMIT: usize = 10;

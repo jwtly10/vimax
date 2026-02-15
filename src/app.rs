@@ -5,7 +5,7 @@ use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::layout::{LayoutNode, SplitDirection};
 use crate::lsp::{lsp_position_to_offset, LspIncoming};
-use crate::picker::{Picker, PickerItem};
+use crate::picker::{Location, Picker, PickerItem};
 use crate::text_grid;
 use crate::vim::VimLayer;
 
@@ -372,7 +372,19 @@ impl Remax {
                                     }
                                     "textDocument/definition" => {
                                         debug!(?result, "definition response");
-                                        self.handle_definition_response(result);
+                                        self.handle_lsp_locations(result, "Definition");
+                                    }
+                                    "textDocument/references" => {
+                                        debug!(?result, "references response");
+                                        self.handle_lsp_locations(result, "References");
+                                    }
+                                    "textDocument/implementation" => {
+                                        debug!(?result, "implementation response");
+                                        self.handle_lsp_locations(result, "Implementation");
+                                    }
+                                    "textDocument/declaration" => {
+                                        debug!(?result, "declaration response");
+                                        self.handle_lsp_locations(result, "Declaration");
                                     }
                                     _ => {
                                         debug!(method = %pending.method, "response matched pending request");
@@ -510,51 +522,99 @@ impl Remax {
             .into()
     }
 
-    /// https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_definition
-    fn handle_definition_response(&mut self, result: serde_json::Value) {
-        // Response can be: null, Location, Location[], LocationLink[]
-        let location: Option<lsp_types::Location> = if result.is_null() {
-            None
-        } else if result.get("uri").is_some() {
-            serde_json::from_value(result).ok()
-        } else if let Some(arr) = result.as_array() {
-            if let Some(first) = arr.first() {
-                if first.get("targetUri").is_some() {
-                    let link: Option<lsp_types::LocationLink> =
-                        serde_json::from_value(first.clone()).ok();
-                    link.map(|l| lsp_types::Location {
+    fn parse_lsp_locations(&self, result: &serde_json::Value) -> Vec<lsp_types::Location> {
+        if result.is_null() {
+            return Vec::new();
+        }
+        if result.get("uri").is_some() {
+            if let Ok(loc) = serde_json::from_value::<lsp_types::Location>(result.clone()) {
+                return vec![loc];
+            }
+        }
+        if let Some(arr) = result.as_array() {
+            if arr.is_empty() {
+                return Vec::new();
+            }
+            if arr[0].get("targetUri").is_some() {
+                return arr
+                    .iter()
+                    .filter_map(|v| serde_json::from_value::<lsp_types::LocationLink>(v.clone()).ok())
+                    .map(|l| lsp_types::Location {
                         uri: l.target_uri,
                         range: l.target_selection_range,
                     })
-                } else {
-                    serde_json::from_value(first.clone()).ok()
-                }
-            } else {
-                None
+                    .collect();
             }
-        } else {
-            None
-        };
+            return arr
+                .iter()
+                .filter_map(|v| serde_json::from_value::<lsp_types::Location>(v.clone()).ok())
+                .collect();
+        }
+        Vec::new()
+    }
 
-        if let Some(location) = location {
-            let path_str = location.uri.path().to_string();
-            debug!(uri = ?location.uri, path = %path_str, line = location.range.start.line, col = location.range.start.character, "jumping to definition");
-            let path = std::path::Path::new(&path_str);
+    fn jump_to_lsp_location(&mut self, loc: &lsp_types::Location) {
+        let path_str = loc.uri.path().to_string();
+        let path = std::path::Path::new(&path_str);
+        self.editor.open_file(path);
+        let buf = self.editor.buffer();
+        let offset = lsp_position_to_offset(buf.rope(), &loc.range.start);
+        self.editor.window_mut().cursor = buf.clamp_cursor(offset);
+        self.editor.ensure_cursor_visible();
+    }
 
-            self.editor.open_file(path);
-
-            let buf = self.editor.buffer();
-            let offset = lsp_position_to_offset(buf.rope(), &location.range.start);
-            self.editor.window_mut().cursor = buf.clamp_cursor(offset);
-            self.editor.ensure_cursor_visible();
-            self.editor.status_message = format!(
-                "Definition: {}:{}:{}",
-                path.display(),
-                location.range.start.line + 1,
-                location.range.start.character + 1
-            );
-        } else {
-            self.editor.status_message = String::from("No definition found");
+    fn handle_lsp_locations(&mut self, result: serde_json::Value, label: &str) {
+        let cwd = self.editor.workspace().cwd.clone();
+        let locations: Vec<_> = self
+            .parse_lsp_locations(&result)
+            .into_iter()
+            .filter(|loc| {
+                let path = Path::new(loc.uri.path().as_str());
+                path.starts_with(&cwd)
+            })
+            .collect();
+        match locations.len() {
+            0 => {
+                self.editor.status_message = format!("No {} found", label);
+            }
+            1 => {
+                let loc = &locations[0];
+                let path_str = loc.uri.path().to_string();
+                self.editor.status_message = format!(
+                    "{}: {}:{}:{}",
+                    label,
+                    path_str,
+                    loc.range.start.line + 1,
+                    loc.range.start.character + 1,
+                );
+                self.jump_to_lsp_location(loc);
+            }
+            _ => {
+                let cwd = self.editor.workspace().cwd.clone();
+                let items: Vec<PickerItem> = locations
+                    .iter()
+                    .enumerate()
+                    .map(|(i, loc)| {
+                        let path = PathBuf::from(loc.uri.path().to_string());
+                        let display_path = path
+                            .strip_prefix(&cwd)
+                            .unwrap_or(&path)
+                            .display()
+                            .to_string();
+                        let line = loc.range.start.line as usize;
+                        let col = loc.range.start.character as usize;
+                        PickerItem {
+                            id: i,
+                            label: format!("{}:{}:{}", display_path, line + 1, col + 1),
+                            location: Some(Location { path, line, col }),
+                        }
+                    })
+                    .collect();
+                self.active_picker_type = Some(PickerKind::Locations);
+                self.picker_restore_buffer =
+                    Some(self.editor.workspace().window().buffer_id);
+                self.picker = Some(Picker::new(label, items));
+            }
         }
     }
 
@@ -565,7 +625,7 @@ impl Remax {
                 let buf_list = self.editor.buffer_list();
                 let items: Vec<PickerItem> = buf_list
                     .into_iter()
-                    .map(|(id, label)| PickerItem { id, label })
+                    .map(|(id, label)| PickerItem { id, label, location: None })
                     .collect();
                 self.picker_restore_buffer = Some(self.editor.workspace().window().buffer_id);
                 self.picker = Some(Picker::new("Buffers", items));
@@ -600,11 +660,14 @@ impl Remax {
                         let path = entry.path();
                         let label = path.strip_prefix(cwd).unwrap_or(path).display().to_string();
                         debug_assert!(!label.is_empty(), "file label should not be empty");
-                        PickerItem { id: 0, label }
+                        PickerItem { id: 0, label, location: None }
                     })
                     .collect::<Vec<_>>();
                 self.picker_restore_buffer = Some(self.editor.workspace().window().buffer_id);
-                self.picker = Some(Picker::new("Git Files", files));
+                self.picker = Some(Picker::new("Project Files", files));
+            }
+            PickerKind::Locations => {
+                // Locations picker is opened directly by handle_lsp_locations, not via open_picker
             }
         }
     }
@@ -637,14 +700,27 @@ impl Remax {
                 self.active_picker_type = None;
             }
             keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                if let Some(PickerKind::ProjectFiles {
-                    show_ignored: _,
-                    max_results: _,
-                }) = self.active_picker_type
-                    && let Some(picker) = &self.picker
+                if let Some(picker) = &self.picker
                     && let Some(item) = picker.selected_item()
                 {
-                    self.editor.open_file(&PathBuf::from(&item.label));
+                    match self.active_picker_type {
+                        Some(PickerKind::ProjectFiles { .. }) => {
+                            self.editor.open_file(&PathBuf::from(&item.label));
+                        }
+                        Some(PickerKind::Locations) => {
+                            if let Some(loc) = &item.location {
+                                let path = loc.path.clone();
+                                let line = loc.line;
+                                let col = loc.col;
+                                self.editor.open_file(&path);
+                                let buf = self.editor.buffer();
+                                let offset = buf.cursor_from_position(line, col);
+                                self.editor.window_mut().cursor = buf.clamp_cursor(offset);
+                                self.editor.ensure_cursor_visible();
+                            }
+                        }
+                        _ => {}
+                    }
                 }
 
                 self.picker = None;

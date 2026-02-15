@@ -222,6 +222,18 @@ pub fn build_normal_keymap() -> Keymap {
         vec![KeyPress::char('g'), KeyPress::char('d')],
         "lsp.goto_definition",
     );
+    km.bind(
+        vec![KeyPress::char('g'), KeyPress::char('r')],
+        "lsp.references",
+    );
+    km.bind(
+        vec![KeyPress::char('g'), KeyPress::char('i')],
+        "lsp.implementation",
+    );
+    km.bind(
+        vec![KeyPress::char('g'), KeyPress::char('D')],
+        "lsp.declaration",
+    );
 
     km.bind(
         vec![LEADER_KEY, KeyPress::char('b'), KeyPress::char('b')],
@@ -323,6 +335,9 @@ fn build_visual_keymap(normal: &Keymap) -> Keymap {
     // TODO: I hate having to repeat myself here... we should
     // have an abstraction for normal ONLY bindings within the normal mapping
     km.remove(&[KeyPress::char('g'), KeyPress::char('d')]);
+    km.remove(&[KeyPress::char('g'), KeyPress::char('r')]);
+    km.remove(&[KeyPress::char('g'), KeyPress::char('i')]);
+    km.remove(&[KeyPress::char('g'), KeyPress::char('D')]);
 
     km.remove(&[LEADER_KEY, KeyPress::char('b'), KeyPress::char('b')]);
     km.remove(&[LEADER_KEY, KeyPress::char('p'), KeyPress::char('f')]);
