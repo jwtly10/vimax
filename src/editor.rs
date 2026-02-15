@@ -215,7 +215,10 @@ impl Editor {
                 let buf_id = self.buffers.len();
                 let lang = buffer.language();
                 self.buffers.push(buffer);
-                self.syntax_states.push(syntax);
+                if self.syntax_states.len() <= buf_id {
+                    self.syntax_states.resize_with(buf_id + 1, || None);
+                }
+                self.syntax_states[buf_id] = syntax;
                 self.workspace_mut().reset_window_for_buffer(buf_id);
                 self.status_message = format!("\"{}\"", path.display());
 

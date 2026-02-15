@@ -117,6 +117,10 @@ impl Remax {
             );
             let scratch_buf = create_scratch_buffer();
             editor.buffers.push(scratch_buf);
+            // TODO: we should abstract around the buffer list
+            // so we never have to worry about this -
+            // if we create a buffer, it should have it's own syntax by default - or None
+            editor.syntax_states.push(None);
         }
 
         (
