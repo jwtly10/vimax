@@ -9,6 +9,7 @@ pub enum LayoutNode {
     Leaf(usize),
     Split {
         direction: SplitDirection,
+        #[allow(dead_code)]
         ratio: f32,
         children: [Box<LayoutNode>; 2],
     },
@@ -69,6 +70,7 @@ impl LayoutNode {
         }
     }
 
+    #[allow(dead_code)]
     pub fn leaves(&self) -> Vec<usize> {
         match self {
             LayoutNode::Leaf(id) => vec![*id],
@@ -87,23 +89,30 @@ impl LayoutNode {
         }
     }
 
-    pub fn neighbor(&self, current: usize, direction: SplitDirection, forward: bool) -> Option<usize> {
+    pub fn neighbor(
+        &self,
+        current: usize,
+        direction: SplitDirection,
+        forward: bool,
+    ) -> Option<usize> {
         self.find_neighbor(current, direction, forward)
     }
 
     fn find_neighbor(&self, current: usize, dir: SplitDirection, forward: bool) -> Option<usize> {
         match self {
             LayoutNode::Leaf(_) => None,
-            LayoutNode::Split { direction, children, .. } => {
+            LayoutNode::Split {
+                direction,
+                children,
+                ..
+            } => {
                 if *direction == dir {
-                    let (search_child, target_child) = if forward {
-                        (0, 1)
-                    } else {
-                        (1, 0)
-                    };
+                    let (search_child, target_child) = if forward { (0, 1) } else { (1, 0) };
 
                     if children[search_child].contains_leaf(current) {
-                        if let Some(inner) = children[search_child].find_neighbor(current, dir, forward) {
+                        if let Some(inner) =
+                            children[search_child].find_neighbor(current, dir, forward)
+                        {
                             return Some(inner);
                         }
                         return Some(if forward {

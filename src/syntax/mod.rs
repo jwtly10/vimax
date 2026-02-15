@@ -62,26 +62,26 @@ impl SyntaxState {
         loop {
             let offset = hl.next_event_offset();
             if offset >= end_byte {
-                if prev_offset < end_byte {
-                    if let Some(h) = hl.active_highlights().last() {
-                        spans.push(HighlightSpan {
-                            byte_start: prev_offset,
-                            byte_end: end_byte,
-                            color: color_for_group(highlight_to_group(h)),
-                        });
-                    }
+                if prev_offset < end_byte
+                    && let Some(h) = hl.active_highlights().next_back()
+                {
+                    spans.push(HighlightSpan {
+                        byte_start: prev_offset,
+                        byte_end: end_byte,
+                        color: color_for_group(highlight_to_group(h)),
+                    });
                 }
                 break;
             }
 
-            if offset > prev_offset {
-                if let Some(h) = hl.active_highlights().last() {
-                    spans.push(HighlightSpan {
-                        byte_start: prev_offset,
-                        byte_end: offset,
-                        color: color_for_group(highlight_to_group(h)),
-                    });
-                }
+            if offset > prev_offset
+                && let Some(h) = hl.active_highlights().next_back()
+            {
+                spans.push(HighlightSpan {
+                    byte_start: prev_offset,
+                    byte_end: offset,
+                    color: color_for_group(highlight_to_group(h)),
+                });
             }
 
             prev_offset = offset;

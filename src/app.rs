@@ -1,17 +1,24 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::action::{EditorAction, EditorEffect, PickerKind};
 use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::layout::{LayoutNode, SplitDirection};
+use crate::lsp::{lsp_position_to_offset, LspIncoming};
 use crate::picker::{Picker, PickerItem};
 use crate::text_grid;
 use crate::vim::VimLayer;
 
+use iced::advanced::subscription::{self, Recipe};
+use iced::futures::stream::BoxStream;
+use iced::futures::SinkExt;
 use iced::keyboard;
 use iced::widget::Space;
 use iced::widget::{column, container, row, text};
-use iced::{Element, Length, Subscription, Task, Theme, event, window};
+use iced::{event, window, Element, Length, Subscription, Task, Theme};
+use lsp_types::notification::{DidOpenTextDocument, Initialized};
+use lsp_types::{DidOpenTextDocumentParams, InitializedParams};
+use smol::channel::Receiver;
 use tracing::{debug, info};
 
 const SCROLL_SPEED: f32 = 0.5;
@@ -51,8 +58,41 @@ pub enum Message {
         cols: usize,
         window_id: usize,
     },
+    Lsp {
+        server_id: usize,
+        message: String,
+    },
 }
 
+struct LspSubscription {
+    server_id: usize,
+    rx: Receiver<String>,
+}
+
+impl Recipe for LspSubscription {
+    type Output = Message;
+
+    fn hash(&self, state: &mut subscription::Hasher) {
+        use std::hash::Hash;
+        self.server_id.hash(state);
+    }
+
+    fn stream(self: Box<Self>, _input: subscription::EventStream) -> BoxStream<'static, Message> {
+        let rx = self.rx;
+        let server_id = self.server_id;
+        Box::pin(iced::stream::channel(100, async move |mut output| {
+            while let Ok(message) = rx.recv().await {
+                match output.send(Message::Lsp { server_id, message }).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        debug!(error = ?e, server_id, "LSP subscription output channel closed");
+                        break;
+                    }
+                }
+            }
+        }))
+    }
+}
 impl Remax {
     pub fn theme(&self) -> Theme {
         Theme::Dark
@@ -60,27 +100,32 @@ impl Remax {
 
     pub fn boot() -> (Self, Task<Message>) {
         let args = parse_args();
-        let buffer = if let Some(file_path) = args.first() {
-            let path = std::path::Path::new(file_path);
-            let buf_name = path.file_name().unwrap_or_default().to_string_lossy();
-            debug!(?path, "attempting to read file into buffer");
-            match std::fs::read_to_string(path) {
-                Ok(content) => Buffer::from_str(&content, &buf_name, path, false),
-                Err(e) => {
-                    debug!(?e, "failed to read file, starting with empty buffer");
-                    create_scratch_buffer()
-                }
-            }
-        } else {
-            debug!("no file path provided, starting with empty buffer");
-            create_scratch_buffer()
-        };
-
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         info!(?cwd, "editor booted");
+
+        let mut editor = Editor::new(cwd);
+        if let Some(file_path) = args.first() {
+            let path = std::path::Path::new(file_path);
+            debug!(?path, "opening init file from args");
+            editor.open_file(path);
+        } else {
+            debug!("no file args, creating scratch buffer");
+            // TODO: assert may not hold up when we start persisting session
+            debug_assert!(
+                editor.buffers.is_empty(),
+                "buffers should technically always be empty on init"
+            );
+            let scratch_buf = create_scratch_buffer();
+            editor.buffers.push(scratch_buf);
+            // TODO: we should abstract around the buffer list
+            // so we never have to worry about this -
+            // if we create a buffer, it should have it's own syntax by default - or None
+            editor.syntax_states.push(None);
+        }
+
         (
             Self {
-                editor: Editor::new(buffer, cwd),
+                editor,
                 vim: VimLayer::new(),
                 picker: None,
                 active_picker_type: None,
@@ -91,7 +136,7 @@ impl Remax {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([
+        let mut subs = vec![
             event::listen_with(|event, _status, _id| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
                     key,
@@ -108,7 +153,18 @@ impl Remax {
                 _ => None,
             }),
             window::close_requests().map(Message::WindowCloseRequested),
-        ])
+        ];
+
+        for workspace in &self.editor.workspaces {
+            for server in workspace.lsp_manager.servers.iter() {
+                subs.push(subscription::from_recipe(LspSubscription {
+                    server_id: server.id,
+                    rx: server.rx.clone(),
+                }))
+            }
+        }
+
+        Subscription::batch(subs)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -244,6 +300,99 @@ impl Remax {
                     self.editor.ensure_cursor_visible();
                 }
             }
+            Message::Lsp { server_id, message } => {
+                if let Some(incoming) = self.editor.workspace().lsp_manager.handle_message(&message)
+                {
+                    match incoming {
+                        LspIncoming::Response { id, result } => {
+                            debug!(id, "got lsp response");
+                            if let Some(pending) = self
+                                .editor
+                                .workspace_mut()
+                                .lsp_manager
+                                .take_pending_request(id)
+                            {
+                                match pending.method.as_str() {
+                                    "initialize" => {
+                                        debug!(?result, "server initialized");
+                                        let capabilities: lsp_types::ServerCapabilities =
+                                            serde_json::from_value(result["capabilities"].clone())
+                                                .unwrap();
+                                        debug!(?capabilities, "server capabilities");
+                                        if let Some(server) = self
+                                            .editor
+                                            .workspace_mut()
+                                            .lsp_manager
+                                            .servers
+                                            .iter_mut()
+                                            .find(|s| s.id == server_id)
+                                        {
+                                            server.capabilities = Some(capabilities);
+
+                                            if server
+                                                .send_notification::<Initialized>(
+                                                    InitializedParams {},
+                                                )
+                                                .is_ok()
+                                            {
+                                                server.initialized = true;
+                                                let server_lang = server.language;
+
+                                                for buf in &self.editor.buffers {
+                                                    if buf.language() != Some(server_lang) {
+                                                        continue;
+                                                    }
+                                                    if let Some(file_path) = buf.file_path()
+                                                        && let Some(uri) = crate::lsp::path_to_uri(
+                                                            Path::new(file_path),
+                                                        )
+                                                    {
+                                                        let text = buf.rope().to_string();
+                                                        if let Some(server) = self
+                                                            .editor
+                                                            .workspace()
+                                                            .lsp_manager
+                                                            .get_inited_server_for_language(
+                                                                server_lang,
+                                                            )
+                                                        {
+                                                            server.send_notification::<DidOpenTextDocument>(DidOpenTextDocumentParams {
+                                                                text_document: lsp_types::TextDocumentItem {
+                                                                    uri,
+                                                                    language_id: server_lang.id().to_string(),
+                                                                    version: buf.version() as i32,
+                                                                    text,
+                                                                },
+                                                            }).ok();
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    "textDocument/definition" => {
+                                        debug!(?result, "definition response");
+                                        self.handle_definition_response(result);
+                                    }
+                                    _ => {
+                                        debug!(method = %pending.method, "response matched pending request");
+                                    }
+                                }
+                            }
+                        }
+                        LspIncoming::Notification { method, params } => {
+                            debug!(?method, ?params, "got notification");
+                        }
+                        LspIncoming::ServerRequest { id, method, params } => {
+                            debug!(?id, ?method, ?params, "got server request");
+                        }
+                        LspIncoming::Error { id, error } => {
+                            debug!(id, ?error, "got error response");
+                        }
+                    }
+                }
+                debug!(server_id, message, "LSP message received in update");
+            }
         }
         Task::none()
     }
@@ -359,6 +508,54 @@ impl Remax {
                 ..Default::default()
             })
             .into()
+    }
+
+    /// https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_definition
+    fn handle_definition_response(&mut self, result: serde_json::Value) {
+        // Response can be: null, Location, Location[], LocationLink[]
+        let location: Option<lsp_types::Location> = if result.is_null() {
+            None
+        } else if result.get("uri").is_some() {
+            serde_json::from_value(result).ok()
+        } else if let Some(arr) = result.as_array() {
+            if let Some(first) = arr.first() {
+                if first.get("targetUri").is_some() {
+                    let link: Option<lsp_types::LocationLink> =
+                        serde_json::from_value(first.clone()).ok();
+                    link.map(|l| lsp_types::Location {
+                        uri: l.target_uri,
+                        range: l.target_selection_range,
+                    })
+                } else {
+                    serde_json::from_value(first.clone()).ok()
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(location) = location {
+            let path_str = location.uri.path().to_string();
+            debug!(uri = ?location.uri, path = %path_str, line = location.range.start.line, col = location.range.start.character, "jumping to definition");
+            let path = std::path::Path::new(&path_str);
+
+            self.editor.open_file(path);
+
+            let buf = self.editor.buffer();
+            let offset = lsp_position_to_offset(buf.rope(), &location.range.start);
+            self.editor.window_mut().cursor = buf.clamp_cursor(offset);
+            self.editor.ensure_cursor_visible();
+            self.editor.status_message = format!(
+                "Definition: {}:{}:{}",
+                path.display(),
+                location.range.start.line + 1,
+                location.range.start.character + 1
+            );
+        } else {
+            self.editor.status_message = String::from("No definition found");
+        }
     }
 
     fn open_picker(&mut self, kind: PickerKind) {

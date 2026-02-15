@@ -1,14 +1,22 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use tracing::{error, info};
+use lsp_types::notification::DidOpenTextDocument;
+use lsp_types::request::GotoDefinition;
+use lsp_types::{
+    DidOpenTextDocumentParams, GotoDefinitionParams, TextDocumentIdentifier, TextDocumentItem,
+    TextDocumentPositionParams,
+};
+use tracing::{debug, error, info};
 
 use crate::action::{EditorAction, EditorEffect, Motion, Range};
 use crate::buffer::Buffer;
 use crate::layout::SplitDirection;
+use crate::lsp::{offset_to_lsp_position, path_to_uri};
 use crate::registers::Registers;
-use crate::syntax::SyntaxState;
 use crate::syntax::loader::Loader;
+use crate::syntax::SyntaxState;
 use crate::vim::mode::VimMode;
+use crate::window::Window;
 use crate::workspace::Workspace;
 
 pub struct Editor {
@@ -21,18 +29,58 @@ pub struct Editor {
     pub search_pattern: String,
     pub mode_display: String,
     pub status_message: String,
+    jump_list: JumpList,
+}
+
+pub struct JumpList {
+    entries: Vec<(usize, usize)>,
+    pos: usize,
+}
+
+impl JumpList {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            pos: 0,
+        }
+    }
+
+    fn push(&mut self, buffer_id: usize, cursor: usize) {
+        self.entries.truncate(self.pos);
+        self.entries.push((buffer_id, cursor));
+        self.pos = self.entries.len();
+    }
+
+    fn backward(&mut self, current_buf: usize, current_cursor: usize) -> Option<(usize, usize)> {
+        if self.pos == self.entries.len() && !self.entries.is_empty() {
+            self.entries.push((current_buf, current_cursor));
+        }
+        if self.pos > 0 {
+            self.pos -= 1;
+            Some(self.entries[self.pos])
+        } else {
+            None
+        }
+    }
+
+    fn forward(&mut self) -> Option<(usize, usize)> {
+        if self.pos + 1 < self.entries.len() {
+            self.pos += 1;
+            Some(self.entries[self.pos])
+        } else {
+            None
+        }
+    }
 }
 
 impl Editor {
-    pub fn new(buffer: Buffer, cwd: std::path::PathBuf) -> Self {
+    pub fn new(cwd: PathBuf) -> Self {
         let workspace = Workspace::new(0, cwd);
         let loader = Loader::new();
 
-        let syntax = Self::create_syntax_for_buffer(&buffer, &loader);
-
         Self {
-            buffers: vec![buffer],
-            syntax_states: vec![syntax],
+            buffers: Vec::new(),
+            syntax_states: Vec::new(),
             loader,
             workspaces: vec![workspace],
             active_workspace: 0,
@@ -40,6 +88,7 @@ impl Editor {
             search_pattern: String::new(),
             mode_display: String::from("NORMAL"),
             status_message: String::new(),
+            jump_list: JumpList::new(),
         }
     }
 
@@ -49,10 +98,10 @@ impl Editor {
             .and_then(|p| std::path::Path::new(p).extension())
             .and_then(|e| e.to_str());
 
-        if let Some(ext) = ext {
-            if let Some(lang) = loader.language_for_extension(ext) {
-                return SyntaxState::new(buffer.rope(), lang, loader);
-            }
+        if let Some(ext) = ext
+            && let Some(lang) = loader.language_for_extension(ext)
+        {
+            return SyntaxState::new(buffer.rope(), lang, loader);
         }
         None
     }
@@ -61,11 +110,11 @@ impl Editor {
         let ws = &self.workspaces[self.active_workspace];
         for win in &ws.windows {
             let buf_id = win.buffer_id;
-            if buf_id < self.syntax_states.len() {
-                if let Some(state) = &mut self.syntax_states[buf_id] {
-                    let version = self.buffers[buf_id].version();
-                    state.ensure_parsed(self.buffers[buf_id].rope(), version, &self.loader);
-                }
+            if buf_id < self.syntax_states.len()
+                && let Some(state) = &mut self.syntax_states[buf_id]
+            {
+                let version = self.buffers[buf_id].version();
+                state.ensure_parsed(self.buffers[buf_id].rope(), version, &self.loader);
             }
         }
     }
@@ -78,7 +127,7 @@ impl Editor {
         &mut self.workspaces[self.active_workspace]
     }
 
-    pub fn window_mut(&mut self) -> &mut crate::window::Window {
+    pub fn window_mut(&mut self) -> &mut Window {
         self.workspaces[self.active_workspace].window_mut()
     }
 
@@ -94,6 +143,34 @@ impl Editor {
 
     pub fn cursor(&self) -> usize {
         self.workspace().cursor()
+    }
+
+    fn push_jump(&mut self) {
+        let buf_id = self.workspace().window().buffer_id;
+        let cursor = self.cursor();
+        self.jump_list.push(buf_id, cursor);
+    }
+
+    fn jump_backward(&mut self) {
+        let cur_buf = self.workspace().window().buffer_id;
+        let cur_cursor = self.cursor();
+        if let Some((buf_id, cursor)) = self.jump_list.backward(cur_buf, cur_cursor) {
+            if buf_id < self.buffers.len() {
+                let len_chars = self.buffers[buf_id].len_chars();
+                self.workspace_mut().switch_buffer(buf_id, len_chars);
+                self.window_mut().cursor = self.buffers[buf_id].clamp_cursor(cursor);
+            }
+        }
+    }
+
+    fn jump_forward(&mut self) {
+        if let Some((buf_id, cursor)) = self.jump_list.forward() {
+            if buf_id < self.buffers.len() {
+                let len_chars = self.buffers[buf_id].len_chars();
+                self.workspace_mut().switch_buffer(buf_id, len_chars);
+                self.window_mut().cursor = self.buffers[buf_id].clamp_cursor(cursor);
+            }
+        }
     }
 
     pub fn ensure_cursor_visible(&mut self) {
@@ -130,15 +207,53 @@ impl Editor {
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
+
         match std::fs::read_to_string(path) {
             Ok(content) => {
                 let buffer = Buffer::from_str(&content, &buf_name, path, false);
                 let syntax = Self::create_syntax_for_buffer(&buffer, &self.loader);
                 let buf_id = self.buffers.len();
+                let lang = buffer.language();
+                let version = buffer.version();
                 self.buffers.push(buffer);
-                self.syntax_states.push(syntax);
+                if self.syntax_states.len() <= buf_id {
+                    self.syntax_states.resize_with(buf_id + 1, || None);
+                }
+                self.syntax_states[buf_id] = syntax;
                 self.workspace_mut().reset_window_for_buffer(buf_id);
                 self.status_message = format!("\"{}\"", path.display());
+
+                if let Some(lang) = lang {
+                    debug!(?path_str, ?lang, "buffer has language, starting lsp");
+
+                    let cwd = self.workspace().cwd.clone();
+
+                    // Starts the LSP if not already running
+                    self.workspace_mut()
+                        .lsp_manager
+                        .start_server(lang, cwd.as_path());
+
+                    // If a server is already running for this language, send DidOpenTextDocument notification
+                    if let Some(server) = self
+                        .workspace()
+                        .lsp_manager
+                        .get_inited_server_for_language(lang)
+                        && let Some(uri) = path_to_uri(path)
+                    {
+                        server
+                            .send_notification::<DidOpenTextDocument>(DidOpenTextDocumentParams {
+                                text_document: TextDocumentItem {
+                                    uri,
+                                    language_id: lang.id().to_string(),
+                                    version: version as i32,
+                                    text: content.clone(),
+                                },
+                            })
+                            .expect(
+                                "Failed to send DidOpenTextDocument notification to LSP server",
+                            );
+                    }
+                }
             }
             Err(e) => {
                 self.status_message = format!("Error opening file: {}", e);
@@ -337,9 +452,11 @@ impl Editor {
                 self.search_pattern = pattern;
             }
             EditorAction::SearchNext { count } => {
+                self.push_jump();
                 self.search_next(count);
             }
             EditorAction::SearchPrev { count } => {
+                self.push_jump();
                 self.search_prev(count);
             }
             EditorAction::ClearSearch => {
@@ -385,6 +502,7 @@ impl Editor {
                 }
             },
             EditorAction::OpenFile(path) => {
+                self.push_jump();
                 self.open_file(&path);
             }
             EditorAction::NextBuffer => {
@@ -472,6 +590,47 @@ impl Editor {
             }
             EditorAction::SystemPaste => {
                 self.system_paste();
+            }
+            EditorAction::LspGotoDefinition => {
+                self.push_jump();
+                let buf = self.buffer();
+                let cursor = self.cursor();
+                if let Some(file_path) = buf.file_path() {
+                    let position = offset_to_lsp_position(buf.rope(), cursor);
+                    let path = Path::new(file_path);
+                    if let Some(lang) = buf.language()
+                        && let Some(uri) = crate::lsp::path_to_uri(path)
+                    {
+                        if let Some(server) = self
+                            .workspace()
+                            .lsp_manager
+                            .get_inited_server_for_language(lang)
+                        {
+                            let server_id = server.id;
+                            self.workspace_mut()
+                                .lsp_manager
+                                .send_request::<GotoDefinition>(
+                                    server_id,
+                                    GotoDefinitionParams {
+                                        text_document_position_params: TextDocumentPositionParams {
+                                            text_document: TextDocumentIdentifier { uri },
+                                            position,
+                                        },
+                                        work_done_progress_params: Default::default(),
+                                        partial_result_params: Default::default(),
+                                    },
+                                );
+                        } else {
+                            self.status_message = String::from("LSP not ready");
+                        }
+                    }
+                }
+            }
+            EditorAction::JumpBackward => {
+                self.jump_backward();
+            }
+            EditorAction::JumpForward => {
+                self.jump_forward();
             }
             EditorAction::OpenPicker(_) => {
                 // Handled by app layer, not editor

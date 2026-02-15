@@ -206,6 +206,8 @@ pub fn build_global_keymap() -> Keymap {
         vec![KeyPress::char('w').ctrl(), KeyPress::char('l')],
         "window.focus_right",
     );
+    km.bind(vec![KeyPress::char('o').ctrl()], "jump.backward");
+    km.bind(vec![KeyPress::char('i').ctrl()], "jump.forward");
     km.bind(vec![KeyPress::char('c').cmd()], "system.copy");
     km.bind(vec![KeyPress::char('x').cmd()], "system.cut");
     km.bind(vec![KeyPress::char('v').cmd()], "system.paste");
@@ -215,6 +217,11 @@ pub fn build_global_keymap() -> Keymap {
 
 pub fn build_normal_keymap() -> Keymap {
     let mut km = Keymap::new();
+
+    km.bind(
+        vec![KeyPress::char('g'), KeyPress::char('d')],
+        "lsp.goto_definition",
+    );
 
     km.bind(
         vec![LEADER_KEY, KeyPress::char('b'), KeyPress::char('b')],
@@ -315,6 +322,8 @@ fn build_visual_keymap(normal: &Keymap) -> Keymap {
     km.extend_from(normal);
     // TODO: I hate having to repeat myself here... we should
     // have an abstraction for normal ONLY bindings within the normal mapping
+    km.remove(&[KeyPress::char('g'), KeyPress::char('d')]);
+
     km.remove(&[LEADER_KEY, KeyPress::char('b'), KeyPress::char('b')]);
     km.remove(&[LEADER_KEY, KeyPress::char('p'), KeyPress::char('f')]);
     km.remove(&[LEADER_KEY, KeyPress::char('p'), KeyPress::char('g')]);

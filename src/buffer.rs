@@ -1,4 +1,5 @@
 use crate::action::Motion;
+use crate::lsp::Language;
 use crate::undo::{EditKind, UndoStack};
 
 use std::path::Path;
@@ -16,6 +17,7 @@ pub struct Buffer {
     version: u64,
     indent_width: u8,
     use_tabs: bool,
+    language: Option<Language>,
 }
 
 impl Buffer {
@@ -30,17 +32,21 @@ impl Buffer {
             version: 0,
             indent_width: 4,
             use_tabs: false,
+            language: None,
         }
     }
 
     pub fn from_str(s: &str, buf_name: &str, file_path: &Path, read_only: bool) -> Self {
         let rope = Rope::from_str(s);
         let (indent_width, use_tabs) = (4, false); // TODO: detect_indentation(&rope)
+        let language = Language::from_path(file_path);
         debug!(
             ?indent_width,
             ?use_tabs,
+            ?file_path,
             ?buf_name,
-            "detected indent configuration for buffer"
+            ?language,
+            "building buffer from str"
         );
         Self {
             rope,
@@ -52,6 +58,7 @@ impl Buffer {
             version: 0,
             indent_width,
             use_tabs,
+            language,
         }
     }
 
@@ -81,6 +88,10 @@ impl Buffer {
 
     pub fn indent_width(&self) -> u8 {
         self.indent_width
+    }
+
+    pub fn language(&self) -> Option<Language> {
+        self.language
     }
 
     pub fn len_chars(&self) -> usize {

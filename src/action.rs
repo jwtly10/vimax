@@ -88,6 +88,9 @@ pub enum EditorAction {
     SystemPaste,
     ForceQuitApp,
     OpenPicker(PickerKind),
+    LspGotoDefinition,
+    JumpBackward,
+    JumpForward,
 }
 
 pub enum EditorEffect {
