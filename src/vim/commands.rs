@@ -121,6 +121,9 @@ pub fn resolve(
         "search.next" => vec![EditorAction::SearchNext { count }],
         "search.prev" => vec![EditorAction::SearchPrev { count }],
 
+        "jump.backward" => vec![EditorAction::JumpBackward],
+        "jump.forward" => vec![EditorAction::JumpForward],
+
         "op.delete" | "op.change" | "op.yank" => vec![],
 
         "visual.delete" => input.visual_delete(buffer, cursor),

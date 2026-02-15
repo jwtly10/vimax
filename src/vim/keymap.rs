@@ -206,6 +206,8 @@ pub fn build_global_keymap() -> Keymap {
         vec![KeyPress::char('w').ctrl(), KeyPress::char('l')],
         "window.focus_right",
     );
+    km.bind(vec![KeyPress::char('o').ctrl()], "jump.backward");
+    km.bind(vec![KeyPress::char('i').ctrl()], "jump.forward");
     km.bind(vec![KeyPress::char('c').cmd()], "system.copy");
     km.bind(vec![KeyPress::char('x').cmd()], "system.cut");
     km.bind(vec![KeyPress::char('v').cmd()], "system.paste");

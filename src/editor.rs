@@ -29,6 +29,48 @@ pub struct Editor {
     pub search_pattern: String,
     pub mode_display: String,
     pub status_message: String,
+    jump_list: JumpList,
+}
+
+pub struct JumpList {
+    entries: Vec<(usize, usize)>,
+    pos: usize,
+}
+
+impl JumpList {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            pos: 0,
+        }
+    }
+
+    fn push(&mut self, buffer_id: usize, cursor: usize) {
+        self.entries.truncate(self.pos);
+        self.entries.push((buffer_id, cursor));
+        self.pos = self.entries.len();
+    }
+
+    fn backward(&mut self, current_buf: usize, current_cursor: usize) -> Option<(usize, usize)> {
+        if self.pos == self.entries.len() && !self.entries.is_empty() {
+            self.entries.push((current_buf, current_cursor));
+        }
+        if self.pos > 0 {
+            self.pos -= 1;
+            Some(self.entries[self.pos])
+        } else {
+            None
+        }
+    }
+
+    fn forward(&mut self) -> Option<(usize, usize)> {
+        if self.pos + 1 < self.entries.len() {
+            self.pos += 1;
+            Some(self.entries[self.pos])
+        } else {
+            None
+        }
+    }
 }
 
 impl Editor {
@@ -46,6 +88,7 @@ impl Editor {
             search_pattern: String::new(),
             mode_display: String::from("NORMAL"),
             status_message: String::new(),
+            jump_list: JumpList::new(),
         }
     }
 
@@ -100,6 +143,34 @@ impl Editor {
 
     pub fn cursor(&self) -> usize {
         self.workspace().cursor()
+    }
+
+    fn push_jump(&mut self) {
+        let buf_id = self.workspace().window().buffer_id;
+        let cursor = self.cursor();
+        self.jump_list.push(buf_id, cursor);
+    }
+
+    fn jump_backward(&mut self) {
+        let cur_buf = self.workspace().window().buffer_id;
+        let cur_cursor = self.cursor();
+        if let Some((buf_id, cursor)) = self.jump_list.backward(cur_buf, cur_cursor) {
+            if buf_id < self.buffers.len() {
+                let len_chars = self.buffers[buf_id].len_chars();
+                self.workspace_mut().switch_buffer(buf_id, len_chars);
+                self.window_mut().cursor = self.buffers[buf_id].clamp_cursor(cursor);
+            }
+        }
+    }
+
+    fn jump_forward(&mut self) {
+        if let Some((buf_id, cursor)) = self.jump_list.forward() {
+            if buf_id < self.buffers.len() {
+                let len_chars = self.buffers[buf_id].len_chars();
+                self.workspace_mut().switch_buffer(buf_id, len_chars);
+                self.window_mut().cursor = self.buffers[buf_id].clamp_cursor(cursor);
+            }
+        }
     }
 
     pub fn ensure_cursor_visible(&mut self) {
@@ -377,9 +448,11 @@ impl Editor {
                 self.search_pattern = pattern;
             }
             EditorAction::SearchNext { count } => {
+                self.push_jump();
                 self.search_next(count);
             }
             EditorAction::SearchPrev { count } => {
+                self.push_jump();
                 self.search_prev(count);
             }
             EditorAction::ClearSearch => {
@@ -425,6 +498,7 @@ impl Editor {
                 }
             },
             EditorAction::OpenFile(path) => {
+                self.push_jump();
                 self.open_file(&path);
             }
             EditorAction::NextBuffer => {
@@ -514,6 +588,7 @@ impl Editor {
                 self.system_paste();
             }
             EditorAction::LspGotoDefinition => {
+                self.push_jump();
                 let buf = self.buffer();
                 let cursor = self.cursor();
                 if let Some(file_path) = buf.file_path() {
@@ -546,6 +621,12 @@ impl Editor {
                         }
                     }
                 }
+            }
+            EditorAction::JumpBackward => {
+                self.jump_backward();
+            }
+            EditorAction::JumpForward => {
+                self.jump_forward();
             }
             EditorAction::OpenPicker(_) => {
                 // Handled by app layer, not editor
