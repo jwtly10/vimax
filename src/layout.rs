@@ -15,9 +15,6 @@ pub enum LayoutNode {
     },
 }
 
-// TODO: we should fix these dead codes warnings
-// ignoring for now as these currently work - should address when next working here
-#[allow(dead_code)]
 impl LayoutNode {
     pub fn single(window_id: usize) -> Self {
         LayoutNode::Leaf(window_id)
@@ -73,6 +70,7 @@ impl LayoutNode {
         }
     }
 
+    #[allow(dead_code)]
     pub fn leaves(&self) -> Vec<usize> {
         match self {
             LayoutNode::Leaf(id) => vec![*id],
