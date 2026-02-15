@@ -16,6 +16,8 @@ use iced::keyboard;
 use iced::widget::Space;
 use iced::widget::{column, container, row, text};
 use iced::{Element, Length, Subscription, Task, Theme, event, window};
+use lsp_types::InitializedParams;
+use lsp_types::notification::Initialized;
 use smol::channel::Receiver;
 use tracing::{debug, info};
 
@@ -304,6 +306,29 @@ impl Remax {
                     match incoming {
                         LspIncoming::Response { id, result } => {
                             debug!(id, "got response");
+                            if id == 1 {
+                                debug!(result = ?result, "initialize response result");
+                                let capabilities: lsp_types::ServerCapabilities =
+                                    serde_json::from_value(result["capabilities"].clone()).unwrap();
+                                debug!(?capabilities, "server capabilities");
+                                if let Some(server) = self
+                                    .editor
+                                    .workspace_mut()
+                                    .lsp_manager
+                                    .servers
+                                    .iter_mut()
+                                    .find(|s| s.id == server_id)
+                                {
+                                    server.capabilities = Some(capabilities);
+
+                                    if server
+                                        .send_notification::<Initialized>(InitializedParams {})
+                                        .is_ok()
+                                    {
+                                        server.initialized = true;
+                                    }
+                                }
+                            }
                         }
                         LspIncoming::Notification { method, params } => {
                             debug!(method, "got notification");

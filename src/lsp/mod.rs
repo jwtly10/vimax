@@ -1,7 +1,10 @@
 use std::{path::Path, process::Stdio, sync::Arc};
 
 use async_process::{Child, ChildStdin, Command};
-use lsp_types::{ClientCapabilities, ClientInfo, InitializeParams, Uri};
+use lsp_types::{
+    ClientCapabilities, ClientInfo, InitializeParams, ServerCapabilities, Uri,
+    notification::Notification,
+};
 use smol::{
     channel::{Receiver, unbounded},
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -37,7 +40,8 @@ pub struct LspServer {
     stdin: Arc<Mutex<ChildStdin>>,
     pub rx: Receiver<String>,
     root_uri: Uri, // TODO: This should be set dynamically based on the nearest toml or something per language & fallback to workspace
-    initialized: bool,
+    pub capabilities: Option<ServerCapabilities>,
+    pub initialized: bool,
 }
 
 struct LspConfig {
@@ -47,6 +51,30 @@ struct LspConfig {
 
 pub struct LspManager {
     pub servers: Vec<LspServer>,
+}
+
+impl LspServer {
+    pub fn send_notification<N: Notification>(&self, params: N::Params) -> anyhow::Result<()> {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": N::METHOD,
+            "params": params,
+        });
+        let body = serde_json::to_string(&request)?;
+        let content_length = body.len();
+        let message = format!("Content-Length: {}\r\n\r\n{}", content_length, body);
+        debug!(message, "sending notification to LSP server");
+
+        let stdin_handle = Arc::clone(&self.stdin);
+        spawn(async move {
+            let mut stdin = stdin_handle.lock().await;
+            stdin.write_all(message.as_bytes()).await.unwrap();
+            stdin.flush().await.unwrap();
+            debug!("notification sent to LSP server");
+        })
+        .detach();
+        Ok(())
+    }
 }
 
 impl LspManager {
@@ -86,6 +114,7 @@ impl LspManager {
             root_uri,
             rx,
 
+            capabilities: None,
             initialized: false,
         };
 
@@ -171,6 +200,7 @@ impl LspManager {
 
         self.servers.push(server);
     }
+
     pub fn handle_message(&self, server_id: usize, raw: &str) -> Option<LspIncoming> {
         let json: serde_json::Value = serde_json::from_str(raw).ok()?;
 
