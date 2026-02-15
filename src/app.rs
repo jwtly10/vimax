@@ -1,10 +1,10 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::action::{EditorAction, EditorEffect, PickerKind};
 use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::layout::{LayoutNode, SplitDirection};
-use crate::lsp::LspIncoming;
+use crate::lsp::{LspIncoming, detect_language_from_path};
 use crate::picker::{Picker, PickerItem};
 use crate::text_grid;
 use crate::vim::VimLayer;
@@ -16,8 +16,8 @@ use iced::keyboard;
 use iced::widget::Space;
 use iced::widget::{column, container, row, text};
 use iced::{Element, Length, Subscription, Task, Theme, event, window};
-use lsp_types::InitializedParams;
-use lsp_types::notification::Initialized;
+use lsp_types::notification::{DidOpenTextDocument, Initialized};
+use lsp_types::{DidOpenTextDocumentParams, InitializedParams};
 use smol::channel::Receiver;
 use tracing::{debug, info};
 
@@ -332,6 +332,34 @@ impl Remax {
                                                 .is_ok()
                                             {
                                                 server.initialized = true;
+
+                                                let buf = self.editor.buffer();
+
+                                                if let Some(file_path) = buf.file_path() {
+                                                    let lang = detect_language_from_path(
+                                                        Path::new(file_path),
+                                                    );
+                                                    if let Some(lang) = lang {
+                                                        let file_uri_str =
+                                                            format!("file://{}", file_path);
+                                                        let text = buf.rope().to_string();
+                                                        if let Some(server) = self
+                                                            .editor
+                                                            .workspace()
+                                                            .lsp_manager
+                                                            .get_inited_server_for_language(&lang)
+                                                        {
+                                                            server.send_notification::<DidOpenTextDocument>(DidOpenTextDocumentParams {
+                                                                text_document: lsp_types::TextDocumentItem {
+                                                                    uri: file_uri_str.parse().unwrap(),
+                                                                    language_id: lang,
+                                                                    version: 0,
+                                                                    text,
+                                                                },
+                                                            }).ok();
+                                                        }
+                                                    }
+                                                };
                                             }
                                         }
                                     }

@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use lsp_types::notification::DidOpenTextDocument;
+use lsp_types::{DidOpenTextDocumentParams, TextDocumentItem};
 use tracing::{debug, error, info};
 
 use crate::action::{EditorAction, EditorEffect, Motion, Range};
@@ -125,16 +127,16 @@ impl Editor {
         }
 
         let lang = detect_language_from_path(path);
-        if let Some(lang) = lang {
+        if let Some(ref lang) = lang {
             debug!(
                 path = path_str,
                 language = lang,
-                "detected language for file"
+                "detected language for file, starting lsp if available"
             );
             let cwd = self.workspace().cwd.clone();
             self.workspace_mut()
                 .lsp_manager
-                .start_server(&lang, cwd.as_path());
+                .start_server(lang, cwd.as_path());
         } else {
             info!(path = path_str, "could not detect language for file");
         }
@@ -153,6 +155,25 @@ impl Editor {
                 self.syntax_states.push(syntax);
                 self.workspace_mut().reset_window_for_buffer(buf_id);
                 self.status_message = format!("\"{}\"", path.display());
+
+                if let Some(lang) = lang
+                    && let Some(server) = self
+                        .workspace()
+                        .lsp_manager
+                        .get_inited_server_for_language(&lang)
+                {
+                    let file_uri_str = format!("file://{}", path.display());
+                    server
+                        .send_notification::<DidOpenTextDocument>(DidOpenTextDocumentParams {
+                            text_document: TextDocumentItem {
+                                uri: file_uri_str.parse().unwrap(),
+                                language_id: lang,
+                                version: 0,
+                                text: content,
+                            },
+                        })
+                        .expect("Failed to send DidOpenTextDocument notification to LSP server");
+                }
             }
             Err(e) => {
                 self.status_message = format!("Error opening file: {}", e);

@@ -118,6 +118,12 @@ impl LspManager {
         }
     }
 
+    pub fn get_inited_server_for_language(&self, language_id: &str) -> Option<&LspServer> {
+        self.servers
+            .iter()
+            .find(|s| s.language_id == language_id && s.initialized)
+    }
+
     pub fn take_pending_request(&mut self, id: i64) -> Option<PendingRequest> {
         self.pending_requests.remove(&id)
     }
