@@ -17,7 +17,7 @@ pub struct Buffer {
     version: u64,
     indent_width: u8,
     use_tabs: bool,
-    pub language: Option<Language>,
+    language: Option<Language>,
 }
 
 impl Buffer {

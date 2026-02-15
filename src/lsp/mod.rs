@@ -11,7 +11,7 @@ use smol::{
     lock::Mutex,
     spawn,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
