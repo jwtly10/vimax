@@ -4,18 +4,18 @@ use crate::action::{EditorAction, EditorEffect, PickerKind};
 use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::layout::{LayoutNode, SplitDirection};
-use crate::lsp::{LspIncoming, lsp_position_to_offset};
+use crate::lsp::{lsp_position_to_offset, LspIncoming};
 use crate::picker::{Picker, PickerItem};
 use crate::text_grid;
 use crate::vim::VimLayer;
 
 use iced::advanced::subscription::{self, Recipe};
-use iced::futures::SinkExt;
 use iced::futures::stream::BoxStream;
+use iced::futures::SinkExt;
 use iced::keyboard;
 use iced::widget::Space;
 use iced::widget::{column, container, row, text};
-use iced::{Element, Length, Subscription, Task, Theme, event, window};
+use iced::{event, window, Element, Length, Subscription, Task, Theme};
 use lsp_types::notification::{DidOpenTextDocument, Initialized};
 use lsp_types::{DidOpenTextDocumentParams, InitializedParams};
 use smol::channel::Receiver;
@@ -339,20 +339,24 @@ impl Remax {
                                                         continue;
                                                     }
                                                     if let Some(file_path) = buf.file_path()
-                                                        && let Some(uri) = crate::lsp::path_to_uri(Path::new(file_path))
+                                                        && let Some(uri) = crate::lsp::path_to_uri(
+                                                            Path::new(file_path),
+                                                        )
                                                     {
                                                         let text = buf.rope().to_string();
                                                         if let Some(server) = self
                                                             .editor
                                                             .workspace()
                                                             .lsp_manager
-                                                            .get_inited_server_for_language(server_lang)
+                                                            .get_inited_server_for_language(
+                                                                server_lang,
+                                                            )
                                                         {
                                                             server.send_notification::<DidOpenTextDocument>(DidOpenTextDocumentParams {
                                                                 text_document: lsp_types::TextDocumentItem {
                                                                     uri,
                                                                     language_id: server_lang.id().to_string(),
-                                                                    version: 0,
+                                                                    version: buf.version() as i32,
                                                                     text,
                                                                 },
                                                             }).ok();
