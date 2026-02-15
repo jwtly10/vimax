@@ -8,10 +8,14 @@ use crate::picker::{Picker, PickerItem};
 use crate::text_grid;
 use crate::vim::VimLayer;
 
+use iced::advanced::subscription::{self, Recipe};
+use iced::futures::SinkExt;
+use iced::futures::stream::BoxStream;
 use iced::keyboard;
 use iced::widget::Space;
 use iced::widget::{column, container, row, text};
 use iced::{Element, Length, Subscription, Task, Theme, event, window};
+use smol::channel::Receiver;
 use tracing::{debug, info};
 
 const SCROLL_SPEED: f32 = 0.5;
@@ -51,8 +55,42 @@ pub enum Message {
         cols: usize,
         window_id: usize,
     },
+    LspMessage {
+        server_id: usize,
+        message: String,
+    },
 }
 
+struct LspSubscription {
+    server_id: usize,
+    rx: Receiver<String>,
+}
+
+impl Recipe for LspSubscription {
+    type Output = Message;
+
+    fn hash(&self, state: &mut subscription::Hasher) {
+        use std::hash::Hash;
+        self.server_id.hash(state);
+    }
+
+    fn stream(self: Box<Self>, _input: subscription::EventStream) -> BoxStream<'static, Message> {
+        let rx = self.rx;
+        let server_id = self.server_id;
+        Box::pin(iced::stream::channel(100, async move |mut output| {
+            loop {
+                match rx.recv().await {
+                    Ok(message) => {
+                        output
+                            .send(Message::LspMessage { server_id, message })
+                            .await;
+                    }
+                    Err(_) => break,
+                }
+            }
+        }))
+    }
+}
 impl Remax {
     pub fn theme(&self) -> Theme {
         Theme::Dark
@@ -92,7 +130,7 @@ impl Remax {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([
+        let mut subs = vec![
             event::listen_with(|event, _status, _id| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
                     key,
@@ -109,7 +147,18 @@ impl Remax {
                 _ => None,
             }),
             window::close_requests().map(Message::WindowCloseRequested),
-        ])
+        ];
+
+        for workspace in &self.editor.workspaces {
+            for server in workspace.lsp_manager.servers.iter() {
+                subs.push(subscription::from_recipe(LspSubscription {
+                    server_id: server.id,
+                    rx: server.rx.clone(),
+                }))
+            }
+        }
+
+        Subscription::batch(subs)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -244,6 +293,9 @@ impl Remax {
                 if resized {
                     self.editor.ensure_cursor_visible();
                 }
+            }
+            Message::LspMessage { server_id, message } => {
+                debug!(server_id, message, "LSP message received in update");
             }
         }
         Task::none()

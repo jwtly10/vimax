@@ -1,21 +1,30 @@
 use std::{
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Stdio},
-    sync::mpsc::{Receiver, channel},
+    process::Stdio,
+    sync::Arc,
 };
 
+use async_process::{Child, ChildStdin, Command};
+use lsp_types::{ClientCapabilities, ClientInfo, InitializeParams, Uri};
+use smol::{
+    channel::{Receiver, unbounded},
+    io::{AsyncReadExt, AsyncWriteExt},
+    lock::Mutex,
+    spawn,
+};
 use tracing::{debug, info};
 
 pub struct LspManager {
-    servers: Vec<LspServer>,
+    pub servers: Vec<LspServer>,
 }
 
 pub struct LspServer {
+    pub id: usize,
     language_id: String,
     process: Child,
-    stdin: ChildStdin,
-    rx: Receiver<String>,
-    root_path: PathBuf, // TODO: This should be set dynamically based on the nearest toml or something per language & fallback to workspace
+    stdin: Arc<Mutex<ChildStdin>>,
+    pub rx: Receiver<String>,
+    root_uri: Uri, // TODO: This should be set dynamically based on the nearest toml or something per language & fallback to workspace
     initialized: bool,
 }
 
@@ -39,7 +48,7 @@ impl LspManager {
 
         info!(?language_id, ?root_path, "starting LSP server from root");
         let lsp_config = get_config(language_id).expect("Unsupported language");
-        let mut process = std::process::Command::new(lsp_config.cmd)
+        let mut process = Command::new(lsp_config.cmd)
             .args(lsp_config.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -47,37 +56,71 @@ impl LspManager {
             .expect("Failed to start LSP server");
 
         let stdin = process.stdin.take().unwrap();
-        let stdout = process.stdout.take().unwrap();
-        let (tx, rx) = channel();
+        let mut stdout = process.stdout.take().unwrap();
+        let (tx, rx) = unbounded();
 
+        let root_uri_str = format!("file://{}", root_path.display());
+        let root_uri: Uri = root_uri_str.parse().expect("Failed to parse URI");
+        let server_id = self.servers.len();
         let server = LspServer {
+            id: server_id,
             language_id: language_id.to_string(),
             process,
-            stdin,
-            root_path: root_path.to_path_buf(),
+            stdin: Arc::new(Mutex::new(stdin)),
+            root_uri,
             rx,
 
             initialized: false,
         };
 
-        std::thread::spawn(move || {
-            use std::io::{BufRead, BufReader};
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                match line {
-                    Ok(line) => {
-                        debug!(?line, "LSP server output");
-                        if tx.send(line).is_err() {
-                            break;
-                        }
+        spawn(async move {
+            let mut buffer = [0; 1024];
+            loop {
+                match stdout.read(&mut buffer).await {
+                    Ok(n) if n > 0 => {
+                        let output = String::from_utf8_lossy(&buffer[..n]).to_string();
+                        debug!(output, "LSP server output");
+                        tx.send(output).await.unwrap();
                     }
+                    Ok(_) => break, // EOF
                     Err(e) => {
-                        debug!(?e, "Error reading from LSP server");
+                        eprintln!("Error reading from LSP server: {}", e);
                         break;
                     }
                 }
             }
+        })
+        .detach();
+        let init_params = InitializeParams {
+            process_id: Some(std::process::id()),
+            root_uri: Some(server.root_uri.clone()), // TODO: Should be using workspace_folders ?
+            capabilities: ClientCapabilities::default(),
+            client_info: Some(ClientInfo {
+                name: "remax".to_string(),
+                version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            }),
+            ..Default::default()
+        };
+
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": init_params,
         });
+        let body = serde_json::to_string(&request).unwrap();
+        let content_length = body.len();
+        let message = format!("Content-Length: {}\r\n\r\n{}", content_length, body);
+        debug!(message, "sending initialize request to LSP server");
+
+        let stdin_handle = Arc::clone(&server.stdin);
+        spawn(async move {
+            let mut stdin = stdin_handle.lock().await;
+            stdin.write_all(message.as_bytes()).await.unwrap();
+            stdin.flush().await.unwrap();
+            debug!("initialize request sent to LSP server");
+        })
+        .detach();
 
         self.servers.push(server);
     }
