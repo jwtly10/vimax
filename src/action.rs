@@ -4,16 +4,6 @@ use crate::app::Message;
 use crate::vim::mode::VimMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PickerKind {
-    Buffers,
-    ProjectFiles {
-        show_ignored: bool,
-        max_results: usize,
-    },
-    Locations,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Motion {
     Left,
     Right,
@@ -88,7 +78,10 @@ pub enum EditorAction {
     SystemCut,
     SystemPaste,
     ForceQuitApp,
-    OpenPicker(PickerKind),
+    OpenBufferPicker,
+    OpenFilePicker { show_ignored: bool, max_results: usize },
+    OpenFileAtPosition { path: std::path::PathBuf, line: usize, col: usize },
+    SwitchToBuffer(usize),
     LspGotoDefinition,
     LspReferences,
     LspImplementation,

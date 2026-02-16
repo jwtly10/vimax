@@ -653,8 +653,19 @@ impl Editor {
             EditorAction::JumpForward => {
                 self.jump_forward();
             }
-            EditorAction::OpenPicker(_) => {
-                // Handled by app layer, not editor
+            EditorAction::OpenBufferPicker | EditorAction::OpenFilePicker { .. } => {}
+            EditorAction::SwitchToBuffer(buf_id) => {
+                if buf_id < self.buffers.len() {
+                    let len_chars = self.buffers[buf_id].len_chars();
+                    self.workspace_mut().switch_buffer(buf_id, len_chars);
+                }
+            }
+            EditorAction::OpenFileAtPosition { path, line, col } => {
+                self.push_jump();
+                self.open_file(&path);
+                let buf = self.buffer();
+                let offset = buf.cursor_from_position(line, col);
+                self.window_mut().cursor = buf.clamp_cursor(offset);
             }
         }
         if self.buffer().version() != version_before {

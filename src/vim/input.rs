@@ -1,7 +1,7 @@
 use iced::keyboard;
 use tracing::{debug, info};
 
-use crate::action::{EditorAction, Motion, PickerKind, Range};
+use crate::action::{EditorAction, Motion, Range};
 use crate::buffer::Buffer;
 
 use super::commands;
@@ -273,16 +273,15 @@ impl InputState {
 
     pub fn open_buffer_picker(&mut self) -> Vec<EditorAction> {
         self.mode = VimMode::Normal;
-        vec![EditorAction::OpenPicker(PickerKind::Buffers)]
+        vec![EditorAction::OpenBufferPicker]
     }
 
-    // TODO: These config opts come from configuration
     pub fn open_project_files_picker(&mut self, show_ignored: bool) -> Vec<EditorAction> {
         self.mode = VimMode::Normal;
-        vec![EditorAction::OpenPicker(PickerKind::ProjectFiles {
+        vec![EditorAction::OpenFilePicker {
             show_ignored,
             max_results: 1000,
-        })]
+        }]
     }
 
     pub fn enter_visual(&mut self, cursor: usize) {
@@ -1057,7 +1056,7 @@ impl InputState {
             "bn" | "bnext" => vec![EditorAction::NextBuffer],
             "bp" | "bprev" | "bprevious" => vec![EditorAction::PrevBuffer],
             "bd" | "bdelete" => vec![EditorAction::CloseBuffer],
-            "buffers" | "ls" => vec![EditorAction::OpenPicker(PickerKind::Buffers)],
+            "buffers" | "ls" => vec![EditorAction::OpenBufferPicker],
             "vs" | "vsplit" => vec![EditorAction::VSplit],
             "sp" | "split" => vec![EditorAction::HSplit],
             "close" => vec![EditorAction::CloseWindow],

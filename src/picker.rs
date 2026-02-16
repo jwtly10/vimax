@@ -1,21 +1,17 @@
-use std::path::PathBuf;
-
 use nucleo_matcher::{
     Config, Matcher, Utf32Str,
     pattern::{CaseMatching, Normalization, Pattern},
 };
 
-#[derive(Debug, Clone)]
-pub struct Location {
-    pub path: PathBuf,
-    pub line: usize,
-    pub col: usize,
-}
+use crate::action::EditorAction;
 
+#[derive(Debug, Clone)]
 pub struct PickerItem {
-    pub id: usize,
-    pub label: String,
-    pub location: Option<Location>,
+    pub match_text: String,
+    pub display: String,
+    pub group: Option<String>,
+    pub action: EditorAction,
+    pub preview_action: Option<EditorAction>,
 }
 
 pub const PICKER_VISIBLE_LIMIT: usize = 10;
@@ -28,10 +24,11 @@ pub struct Picker {
     pub scroll_offset: usize,
     pub visible_limit: usize,
     pub title: String,
+    pub restore_buffer: Option<usize>,
 }
 
 impl Picker {
-    pub fn new(title: &str, items: Vec<PickerItem>) -> Self {
+    pub fn new(title: &str, items: Vec<PickerItem>, restore_buffer: Option<usize>) -> Self {
         let filtered: Vec<usize> = (0..items.len()).collect();
         Self {
             items,
@@ -41,6 +38,7 @@ impl Picker {
             scroll_offset: 0,
             visible_limit: PICKER_VISIBLE_LIMIT,
             title: title.to_string(),
+            restore_buffer,
         }
     }
 
@@ -52,14 +50,14 @@ impl Picker {
             Normalization::Smart,
         );
 
-        // TODO: Could take this off render thread eventually
         let mut scores: Vec<(usize, u32)> = self
             .items
             .iter()
             .enumerate()
             .filter_map(|(i, item)| {
                 let mut buf = Vec::new();
-                let score = pattern.score(Utf32Str::new(&item.label, &mut buf), &mut matcher)?;
+                let score =
+                    pattern.score(Utf32Str::new(&item.match_text, &mut buf), &mut matcher)?;
                 Some((i, score))
             })
             .collect();

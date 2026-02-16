@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use crate::action::{EditorAction, EditorEffect, PickerKind};
+use crate::action::{EditorAction, EditorEffect};
 use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::layout::{LayoutNode, SplitDirection};
 use crate::lsp::{lsp_position_to_offset, LspIncoming};
-use crate::picker::{Location, Picker, PickerItem};
+use crate::picker::{Picker, PickerItem};
 use crate::text_grid;
 use crate::vim::VimLayer;
 
@@ -27,8 +27,6 @@ pub struct Remax {
     editor: Editor,
     vim: VimLayer,
     picker: Option<Picker>,
-    active_picker_type: Option<PickerKind>,
-    picker_restore_buffer: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -128,8 +126,6 @@ impl Remax {
                 editor,
                 vim: VimLayer::new(),
                 picker: None,
-                active_picker_type: None,
-                picker_restore_buffer: None,
             },
             Task::none(),
         )
@@ -213,8 +209,8 @@ impl Remax {
 
                 for action in actions {
                     match action {
-                        EditorAction::OpenPicker(kind) => {
-                            self.open_picker(kind);
+                        EditorAction::OpenBufferPicker | EditorAction::OpenFilePicker { .. } => {
+                            self.open_picker(action);
                             return Task::none();
                         }
                         action => match self.editor.execute(action) {
@@ -462,13 +458,29 @@ impl Remax {
             .padding([2, 0]);
 
             let mut items_col = column![];
+            let mut current_group: Option<&str> = None;
             for (i, &item_idx) in picker.visible_items() {
                 let item = &picker.items[item_idx];
+
+                if let Some(group) = &item.group {
+                    if current_group != Some(group.as_str()) {
+                        current_group = Some(group.as_str());
+                        let header = container(
+                            text(format!("--- {} ---", group))
+                                .size(13)
+                                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                        )
+                        .width(Length::Fill)
+                        .padding([1, 3]);
+                        items_col = items_col.push(header);
+                    }
+                }
+
                 let is_selected = i == picker.selected;
                 let label = if is_selected {
-                    format!(" > {}", item.label)
+                    format!(" > {}", item.display)
                 } else {
-                    format!("   {}", item.label)
+                    format!("   {}", item.display)
                 };
                 let text_color = if is_selected {
                     iced::Color::from_rgb(1.0, 1.0, 1.0)
@@ -590,11 +602,9 @@ impl Remax {
                 self.jump_to_lsp_location(loc);
             }
             _ => {
-                let cwd = self.editor.workspace().cwd.clone();
                 let items: Vec<PickerItem> = locations
                     .iter()
-                    .enumerate()
-                    .map(|(i, loc)| {
+                    .map(|loc| {
                         let path = PathBuf::from(loc.uri.path().to_string());
                         let display_path = path
                             .strip_prefix(&cwd)
@@ -604,83 +614,87 @@ impl Remax {
                         let line = loc.range.start.line as usize;
                         let col = loc.range.start.character as usize;
                         PickerItem {
-                            id: i,
-                            label: format!("{}:{}:{}", display_path, line + 1, col + 1),
-                            location: Some(Location { path, line, col }),
+                            match_text: format!("{}:{}:{}", display_path, line + 1, col + 1),
+                            display: format!("{}:{}", line + 1, col + 1),
+                            group: Some(display_path),
+                            action: EditorAction::OpenFileAtPosition {
+                                path: path.clone(),
+                                line,
+                                col,
+                            },
+                            preview_action: None,
                         }
                     })
                     .collect();
-                self.active_picker_type = Some(PickerKind::Locations);
-                self.picker_restore_buffer =
-                    Some(self.editor.workspace().window().buffer_id);
-                self.picker = Some(Picker::new(label, items));
+                let restore = Some(self.editor.workspace().window().buffer_id);
+                self.picker = Some(Picker::new(label, items, restore));
             }
         }
     }
 
-    fn open_picker(&mut self, kind: PickerKind) {
-        self.active_picker_type = Some(kind);
-        match kind {
-            PickerKind::Buffers => {
+    fn open_picker(&mut self, action: EditorAction) {
+        let restore = Some(self.editor.workspace().window().buffer_id);
+        match action {
+            EditorAction::OpenBufferPicker => {
                 let buf_list = self.editor.buffer_list();
                 let items: Vec<PickerItem> = buf_list
                     .into_iter()
-                    .map(|(id, label)| PickerItem { id, label, location: None })
+                    .map(|(id, label)| PickerItem {
+                        match_text: label.clone(),
+                        display: label,
+                        group: None,
+                        action: EditorAction::SwitchToBuffer(id),
+                        preview_action: Some(EditorAction::SwitchToBuffer(id)),
+                    })
                     .collect();
-                self.picker_restore_buffer = Some(self.editor.workspace().window().buffer_id);
-                self.picker = Some(Picker::new("Buffers", items));
-                if !self.picker.as_ref().unwrap().items.is_empty() {
-                    self.preview_selected_buffer();
-                }
+                self.picker = Some(Picker::new("Buffers", items, restore));
+                self.execute_preview();
             }
-            PickerKind::ProjectFiles {
+            EditorAction::OpenFilePicker {
                 show_ignored,
                 max_results,
             } => {
-                let cwd = &self.editor.workspace().cwd;
-                let files = ignore::WalkBuilder::new(cwd)
+                let cwd = self.editor.workspace().cwd.clone();
+                let files = ignore::WalkBuilder::new(&cwd)
                     .git_ignore(!show_ignored)
                     .git_exclude(!show_ignored)
                     .filter_entry(|entry| {
-                        // TODO: this will be configurable
-                        // there are some dirs we just never want to look at
                         let custom_ignores = [".git", "target", "node_modules", "dist", "build"];
                         let file_name = entry.file_name().to_string_lossy();
-                        if custom_ignores.contains(&file_name.as_ref()) {
-                            return false;
-                        }
-
-                        true
+                        !custom_ignores.contains(&file_name.as_ref())
                     })
                     .build()
                     .filter_map(|entry| entry.ok())
                     .take(max_results)
                     .filter(|entry| entry.file_type().map(|ft| ft.is_file()).unwrap_or(false))
                     .map(|entry| {
-                        let path = entry.path();
-                        let label = path.strip_prefix(cwd).unwrap_or(path).display().to_string();
-                        debug_assert!(!label.is_empty(), "file label should not be empty");
-                        PickerItem { id: 0, label, location: None }
+                        let path = entry.into_path();
+                        let display = path
+                            .strip_prefix(&cwd)
+                            .unwrap_or(&path)
+                            .display()
+                            .to_string();
+                        PickerItem {
+                            match_text: display.clone(),
+                            display,
+                            group: None,
+                            action: EditorAction::OpenFile(path),
+                            preview_action: None,
+                        }
                     })
                     .collect::<Vec<_>>();
-                self.picker_restore_buffer = Some(self.editor.workspace().window().buffer_id);
-                self.picker = Some(Picker::new("Project Files", files));
+                self.picker = Some(Picker::new("Project Files", files, restore));
             }
-            PickerKind::Locations => {
-                // Locations picker is opened directly by handle_lsp_locations, not via open_picker
-            }
+            _ => {}
         }
     }
 
-    // TODO: only for some picker implementations do we want to preview
-    // things like rg cwd search - we don't
-    fn preview_selected_buffer(&mut self) {
+    fn execute_preview(&mut self) {
         if let Some(picker) = &self.picker
             && let Some(item) = picker.selected_item()
+            && let Some(action) = item.preview_action.clone()
         {
-            let buf_id = item.id;
-            let len_chars = self.editor.buffers[buf_id].len_chars();
-            self.editor.workspace_mut().switch_buffer(buf_id, len_chars);
+            self.editor.execute(action);
         }
     }
 
@@ -692,80 +706,53 @@ impl Remax {
     ) -> Task<Message> {
         match key {
             keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                if let Some(buf_id) = self.picker_restore_buffer.take() {
-                    let len_chars = self.editor.buffers[buf_id].len_chars();
-                    self.editor.workspace_mut().switch_buffer(buf_id, len_chars);
+                if let Some(picker) = &self.picker {
+                    if let Some(buf_id) = picker.restore_buffer {
+                        let len_chars = self.editor.buffers[buf_id].len_chars();
+                        self.editor.workspace_mut().switch_buffer(buf_id, len_chars);
+                    }
                 }
                 self.picker = None;
-                self.active_picker_type = None;
             }
             keyboard::Key::Named(keyboard::key::Named::Enter) => {
                 if let Some(picker) = &self.picker
                     && let Some(item) = picker.selected_item()
                 {
-                    match self.active_picker_type {
-                        Some(PickerKind::ProjectFiles { .. }) => {
-                            self.editor.open_file(&PathBuf::from(&item.label));
-                        }
-                        Some(PickerKind::Locations) => {
-                            if let Some(loc) = &item.location {
-                                let path = loc.path.clone();
-                                let line = loc.line;
-                                let col = loc.col;
-                                self.editor.open_file(&path);
-                                let buf = self.editor.buffer();
-                                let offset = buf.cursor_from_position(line, col);
-                                self.editor.window_mut().cursor = buf.clamp_cursor(offset);
-                                self.editor.ensure_cursor_visible();
-                            }
-                        }
-                        _ => {}
-                    }
+                    let action = item.action.clone();
+                    self.editor.execute(action);
                 }
-
                 self.picker = None;
-                self.active_picker_type = None;
-                self.picker_restore_buffer = None;
+                self.editor.ensure_cursor_visible();
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
                 if let Some(picker) = &mut self.picker {
                     picker.move_up();
                 }
-                if let Some(PickerKind::Buffers) = self.active_picker_type {
-                    self.preview_selected_buffer()
-                }
+                self.execute_preview();
             }
             keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
                 if let Some(picker) = &mut self.picker {
                     picker.move_down();
                 }
-                if let Some(PickerKind::Buffers) = self.active_picker_type {
-                    self.preview_selected_buffer()
-                }
+                self.execute_preview();
             }
             keyboard::Key::Character(c) if modifiers.control() && c.as_str() == "p" => {
                 if let Some(picker) = &mut self.picker {
                     picker.move_up();
                 }
-                if let Some(PickerKind::Buffers) = self.active_picker_type {
-                    self.preview_selected_buffer()
-                }
+                self.execute_preview();
             }
             keyboard::Key::Character(c) if modifiers.control() && c.as_str() == "n" => {
                 if let Some(picker) = &mut self.picker {
                     picker.move_down();
                 }
-                if let Some(PickerKind::Buffers) = self.active_picker_type {
-                    self.preview_selected_buffer()
-                }
+                self.execute_preview();
             }
             keyboard::Key::Named(keyboard::key::Named::Backspace) => {
                 if let Some(picker) = &mut self.picker {
                     picker.backspace();
                 }
-                if let Some(PickerKind::Buffers) = self.active_picker_type {
-                    self.preview_selected_buffer()
-                }
+                self.execute_preview();
             }
             _ => {
                 if let Some(t) = text {
@@ -776,9 +763,7 @@ impl Remax {
                             }
                         }
                     }
-                    if let Some(PickerKind::Buffers) = self.active_picker_type {
-                        self.preview_selected_buffer();
-                    }
+                    self.execute_preview();
                 }
             }
         }
