@@ -1,19 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use lsp_types::notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument};
-use lsp_types::request::{GotoDeclaration, GotoDefinition, GotoImplementation, References, Request};
-use lsp_types::{
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DidSaveTextDocumentParams, GotoDefinitionParams, ReferenceContext, ReferenceParams,
-    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
-    TextDocumentPositionParams, VersionedTextDocumentIdentifier,
-};
 use tracing::{debug, error, info};
 
 use crate::action::{EditorAction, EditorEffect, Motion, Range};
 use crate::buffer::Buffer;
 use crate::layout::SplitDirection;
-use crate::lsp::{offset_to_lsp_position, path_to_uri};
 use crate::registers::Registers;
 use crate::syntax::loader::Loader;
 use crate::syntax::SyntaxState;
@@ -206,7 +197,6 @@ impl Editor {
                 let syntax = Self::create_syntax_for_buffer(&buffer, &self.loader);
                 let buf_id = self.buffers.len();
                 let lang = buffer.language();
-                let version = buffer.version();
                 self.buffers.push(buffer);
                 if self.syntax_states.len() <= buf_id {
                     self.syntax_states.resize_with(buf_id + 1, || None);
@@ -225,26 +215,9 @@ impl Editor {
                         .lsp_manager
                         .start_server(lang, cwd.as_path());
 
-                    // If a server is already running for this language, send DidOpenTextDocument notification
-                    if let Some(server) = self
-                        .workspace()
+                    self.workspace()
                         .lsp_manager
-                        .get_inited_server_for_language(lang)
-                        && let Some(uri) = path_to_uri(path)
-                    {
-                        server
-                            .send_notification::<DidOpenTextDocument>(DidOpenTextDocumentParams {
-                                text_document: TextDocumentItem {
-                                    uri,
-                                    language_id: lang.id().to_string(),
-                                    version: version as i32,
-                                    text: content.clone(),
-                                },
-                            })
-                            .expect(
-                                "Failed to send DidOpenTextDocument notification to LSP server",
-                            );
-                    }
+                        .notify_did_open(&self.buffers[buf_id], &content);
                 }
             }
             Err(e) => {
@@ -585,50 +558,51 @@ impl Editor {
             }
             EditorAction::LspGotoDefinition => {
                 self.push_jump();
-                self.send_lsp_position_request::<GotoDefinition>("LSP not ready");
+                let (win, buf) = current_ref!(self);
+                let cursor = win.cursor;
+                if self.workspaces[self.active_workspace]
+                    .lsp_manager
+                    .goto_definition(buf, cursor)
+                    .is_none()
+                {
+                    self.status_message = String::from("LSP not ready");
+                }
             }
             EditorAction::LspReferences => {
                 self.push_jump();
                 let (win, buf) = current_ref!(self);
                 let cursor = win.cursor;
-                if let Some(file_path) = buf.file_path() {
-                    let position = offset_to_lsp_position(buf.rope(), cursor);
-                    let path = Path::new(file_path);
-                    if let Some(lang) = buf.language()
-                        && let Some(uri) = crate::lsp::path_to_uri(path)
-                    {
-                        let ws = &self.workspaces[self.active_workspace];
-                        if let Some(server) = ws.lsp_manager.get_inited_server_for_language(lang) {
-                            let server_id = server.id;
-                            self.workspaces[self.active_workspace]
-                                .lsp_manager
-                                .send_request::<References>(
-                                    server_id,
-                                    ReferenceParams {
-                                        text_document_position: TextDocumentPositionParams {
-                                            text_document: TextDocumentIdentifier { uri },
-                                            position,
-                                        },
-                                        work_done_progress_params: Default::default(),
-                                        partial_result_params: Default::default(),
-                                        context: ReferenceContext {
-                                            include_declaration: true,
-                                        },
-                                    },
-                                );
-                        } else {
-                            self.status_message = String::from("LSP not ready");
-                        }
-                    }
+                if self.workspaces[self.active_workspace]
+                    .lsp_manager
+                    .find_references(buf, cursor)
+                    .is_none()
+                {
+                    self.status_message = String::from("LSP not ready");
                 }
             }
             EditorAction::LspImplementation => {
                 self.push_jump();
-                self.send_lsp_position_request::<GotoImplementation>("LSP not ready");
+                let (win, buf) = current_ref!(self);
+                let cursor = win.cursor;
+                if self.workspaces[self.active_workspace]
+                    .lsp_manager
+                    .goto_implementation(buf, cursor)
+                    .is_none()
+                {
+                    self.status_message = String::from("LSP not ready");
+                }
             }
             EditorAction::LspDeclaration => {
                 self.push_jump();
-                self.send_lsp_position_request::<GotoDeclaration>("LSP not ready");
+                let (win, buf) = current_ref!(self);
+                let cursor = win.cursor;
+                if self.workspaces[self.active_workspace]
+                    .lsp_manager
+                    .goto_declaration(buf, cursor)
+                    .is_none()
+                {
+                    self.status_message = String::from("LSP not ready");
+                }
             }
             EditorAction::JumpBackward => {
                 self.jump_backward();
@@ -657,125 +631,24 @@ impl Editor {
         EditorEffect::None
     }
 
-    fn send_lsp_position_request<R: Request<Params = GotoDefinitionParams>>(
-        &mut self,
-        not_ready_msg: &str,
-    ) {
-        let (win, buf) = current_ref!(self);
-        let cursor = win.cursor;
-        if let Some(file_path) = buf.file_path() {
-            let position = offset_to_lsp_position(buf.rope(), cursor);
-            let path = Path::new(file_path);
-            if let Some(lang) = buf.language()
-                && let Some(uri) = crate::lsp::path_to_uri(path)
-            {
-                let ws = &self.workspaces[self.active_workspace];
-                if let Some(server) = ws.lsp_manager.get_inited_server_for_language(lang) {
-                    let server_id = server.id;
-                    self.workspaces[self.active_workspace]
-                        .lsp_manager
-                        .send_request::<R>(
-                            server_id,
-                            GotoDefinitionParams {
-                                text_document_position_params: TextDocumentPositionParams {
-                                    text_document: TextDocumentIdentifier { uri },
-                                    position,
-                                },
-                                work_done_progress_params: Default::default(),
-                                partial_result_params: Default::default(),
-                            },
-                        );
-                } else {
-                    self.status_message = String::from(not_ready_msg);
-                }
-            }
-        }
-    }
-
     fn notify_lsp_did_change(&self) {
         let (_, buf) = current_ref!(self);
-        let lang = match buf.language() {
-            Some(l) => l,
-            None => return,
-        };
-        let file_path = match buf.file_path() {
-            Some(p) => p,
-            None => return,
-        };
-        let ws = &self.workspaces[self.active_workspace];
-        let server = match ws.lsp_manager.get_inited_server_for_language(lang) {
-            Some(s) => s,
-            None => return,
-        };
-        let uri = match path_to_uri(Path::new(file_path)) {
-            Some(u) => u,
-            None => return,
-        };
-        server
-            .send_notification::<DidChangeTextDocument>(DidChangeTextDocumentParams {
-                text_document: VersionedTextDocumentIdentifier {
-                    uri,
-                    version: buf.version() as i32,
-                },
-                content_changes: vec![TextDocumentContentChangeEvent {
-                    range: None,
-                    range_length: None,
-                    text: buf.rope().to_string(),
-                }],
-            })
-            .ok();
+        self.workspaces[self.active_workspace]
+            .lsp_manager
+            .notify_did_change(buf);
     }
 
     fn notify_lsp_did_save(&self) {
         let (_, buf) = current_ref!(self);
-        let lang = match buf.language() {
-            Some(l) => l,
-            None => return,
-        };
-        let file_path = match buf.file_path() {
-            Some(p) => p,
-            None => return,
-        };
-        let ws = &self.workspaces[self.active_workspace];
-        let server = match ws.lsp_manager.get_inited_server_for_language(lang) {
-            Some(s) => s,
-            None => return,
-        };
-        let uri = match path_to_uri(Path::new(file_path)) {
-            Some(u) => u,
-            None => return,
-        };
-        server
-            .send_notification::<DidSaveTextDocument>(DidSaveTextDocumentParams {
-                text_document: TextDocumentIdentifier { uri },
-                text: Some(buf.rope().to_string()),
-            })
-            .ok();
+        self.workspaces[self.active_workspace]
+            .lsp_manager
+            .notify_did_save(buf);
     }
 
     fn notify_lsp_did_close(&self, buf: &Buffer) {
-        let lang = match buf.language() {
-            Some(l) => l,
-            None => return,
-        };
-        let file_path = match buf.file_path() {
-            Some(p) => p,
-            None => return,
-        };
-        let ws = &self.workspaces[self.active_workspace];
-        let server = match ws.lsp_manager.get_inited_server_for_language(lang) {
-            Some(s) => s,
-            None => return,
-        };
-        let uri = match path_to_uri(Path::new(file_path)) {
-            Some(u) => u,
-            None => return,
-        };
-        server
-            .send_notification::<DidCloseTextDocument>(DidCloseTextDocumentParams {
-                text_document: TextDocumentIdentifier { uri },
-            })
-            .ok();
+        self.workspaces[self.active_workspace]
+            .lsp_manager
+            .notify_did_close(buf);
     }
 
     fn system_copy(&mut self, cut: bool) {

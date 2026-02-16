@@ -1,3 +1,5 @@
+pub mod client;
+
 use std::{collections::HashMap, path::Path, process::Stdio, sync::Arc};
 
 use async_process::{Child, ChildStdin, Command};
