@@ -1,3 +1,5 @@
+pub mod sources;
+
 use iced::keyboard;
 use iced::widget::{Space, column, container, rich_text, row, span, text};
 use iced::{Element, Length, Theme};
@@ -252,18 +254,18 @@ impl Picker {
         for (i, &item_idx) in self.visible_items() {
             let item = &self.items[item_idx];
 
-            if let Some(group) = &item.group {
-                if current_group != Some(group.as_str()) {
-                    current_group = Some(group.as_str());
-                    let header = container(
-                        text(format!("  {}", group))
-                            .size(12)
-                            .color(iced::Color::from_rgb(0.5, 0.6, 0.8)),
-                    )
-                    .width(Length::Fill)
-                    .padding([2, 4]);
-                    items_col = items_col.push(header);
-                }
+            if let Some(group) = &item.group
+                && current_group != Some(group.as_str())
+            {
+                current_group = Some(group.as_str());
+                let header = container(
+                    text(format!("  {}", group))
+                        .size(12)
+                        .color(iced::Color::from_rgb(0.5, 0.6, 0.8)),
+                )
+                .width(Length::Fill)
+                .padding([2, 4]);
+                items_col = items_col.push(header);
             }
 
             let is_selected = i == self.selected;

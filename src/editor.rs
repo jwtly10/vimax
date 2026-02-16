@@ -18,7 +18,6 @@ use crate::registers::Registers;
 use crate::syntax::loader::Loader;
 use crate::syntax::SyntaxState;
 use crate::vim::mode::VimMode;
-use crate::window::Window;
 use crate::workspace::Workspace;
 
 pub struct Editor {
@@ -127,10 +126,6 @@ impl Editor {
 
     pub fn workspace_mut(&mut self) -> &mut Workspace {
         &mut self.workspaces[self.active_workspace]
-    }
-
-    pub fn window_mut(&mut self) -> &mut Window {
-        self.workspaces[self.active_workspace].window_mut()
     }
 
     pub fn buffer(&self) -> &Buffer {

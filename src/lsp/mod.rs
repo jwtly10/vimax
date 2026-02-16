@@ -352,6 +352,7 @@ pub fn offset_to_lsp_position(rope: &ropey::Rope, offset: usize) -> lsp_types::P
 }
 
 /// Convert LSP Position to rope char offset.
+#[allow(dead_code)]
 pub fn lsp_position_to_offset(rope: &ropey::Rope, pos: &lsp_types::Position) -> usize {
     let line = pos.line as usize;
     if line >= rope.len_lines() {

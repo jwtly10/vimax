@@ -1,15 +1,11 @@
-use std::collections::HashMap;
-use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 
 use crate::action::{EditorAction, EditorEffect};
 use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::layout::{LayoutNode, SplitDirection};
-use crate::lsp::{LspIncoming, lsp_position_to_offset};
-use crate::picker::{DetailSpan, Picker, PickerEvent, PickerItem};
-use crate::syntax::SyntaxState;
-use crate::syntax::loader::Loader;
+use crate::lsp::LspIncoming;
+use crate::picker::{Picker, PickerEvent};
 use crate::text_grid;
 use crate::vim::VimLayer;
 
@@ -22,7 +18,6 @@ use iced::widget::{column, container, row, text};
 use iced::{Element, Length, Subscription, Task, Theme, event, window};
 use lsp_types::notification::{DidOpenTextDocument, Initialized};
 use lsp_types::{DidOpenTextDocumentParams, InitializedParams};
-use ropey::Rope;
 use smol::channel::Receiver;
 use tracing::{debug, info};
 
@@ -485,77 +480,32 @@ impl Remax {
             .into()
     }
 
-    fn parse_lsp_locations(&self, result: &serde_json::Value) -> Vec<lsp_types::Location> {
-        if result.is_null() {
-            return Vec::new();
-        }
-        if result.get("uri").is_some() {
-            if let Ok(loc) = serde_json::from_value::<lsp_types::Location>(result.clone()) {
-                return vec![loc];
-            }
-        }
-        if let Some(arr) = result.as_array() {
-            if arr.is_empty() {
-                return Vec::new();
-            }
-            if arr[0].get("targetUri").is_some() {
-                return arr
-                    .iter()
-                    .filter_map(|v| {
-                        serde_json::from_value::<lsp_types::LocationLink>(v.clone()).ok()
-                    })
-                    .map(|l| lsp_types::Location {
-                        uri: l.target_uri,
-                        range: l.target_selection_range,
-                    })
-                    .collect();
-            }
-            return arr
-                .iter()
-                .filter_map(|v| serde_json::from_value::<lsp_types::Location>(v.clone()).ok())
-                .collect();
-        }
-        Vec::new()
-    }
-
-    fn jump_to_lsp_location(&mut self, loc: &lsp_types::Location) {
-        let path_str = loc.uri.path().to_string();
-        let path = std::path::Path::new(&path_str);
-        self.editor.open_file(path);
-        let buf = self.editor.buffer();
-        let offset = lsp_position_to_offset(buf.rope(), &loc.range.start);
-        self.editor.window_mut().cursor = buf.clamp_cursor(offset);
-        self.editor.ensure_cursor_visible();
-    }
-
     fn handle_lsp_locations(&mut self, result: serde_json::Value, label: &str) {
         let cwd = self.editor.workspace().cwd.clone();
-        let locations: Vec<_> = self
-            .parse_lsp_locations(&result)
-            .into_iter()
-            .filter(|loc| {
-                let path = Path::new(loc.uri.path().as_str());
-                path.starts_with(&cwd)
-            })
-            .collect();
+        let mut locations = crate::picker::sources::parse_lsp_locations(&result);
+        locations.retain(|loc| Path::new(loc.uri.path().as_str()).starts_with(&cwd));
+
         match locations.len() {
             0 => {
                 self.editor.status_message = format!("No {} found", label);
             }
             1 => {
                 let loc = &locations[0];
-                let path_str = loc.uri.path().to_string();
                 self.editor.status_message = format!(
                     "{}: {}:{}:{}",
                     label,
-                    path_str,
+                    loc.uri.path(),
                     loc.range.start.line + 1,
                     loc.range.start.character + 1,
                 );
-                self.jump_to_lsp_location(loc);
+                let path = PathBuf::from(loc.uri.path().to_string());
+                let line = loc.range.start.line as usize;
+                let col = loc.range.start.character as usize;
+                self.editor
+                    .execute(EditorAction::OpenFileAtPosition { path, line, col });
+                self.editor.ensure_cursor_visible();
             }
             _ => {
-                let mut locations = locations;
                 locations.sort_by(|a, b| {
                     a.uri
                         .path()
@@ -563,111 +513,28 @@ impl Remax {
                         .cmp(b.uri.path().as_str())
                         .then(a.range.start.line.cmp(&b.range.start.line))
                 });
-
-                let mut file_cache: HashMap<String, Option<(Rope, Option<SyntaxState>)>> =
-                    HashMap::new();
-
-                let items: Vec<PickerItem> = locations
-                    .iter()
-                    .map(|loc| {
-                        let path = PathBuf::from(loc.uri.path().to_string());
-                        let display_path = path
-                            .strip_prefix(&cwd)
-                            .unwrap_or(&path)
-                            .display()
-                            .to_string();
-                        let line = loc.range.start.line as usize;
-                        let col = loc.range.start.character as usize;
-                        let path_str = path.to_string_lossy().to_string();
-
-                        let (detail, detail_spans) = self
-                            .editor
-                            .buffers
-                            .iter()
-                            .enumerate()
-                            .find(|(_, b)| b.file_path() == Some(&path_str))
-                            .and_then(|(buf_id, b)| {
-                                highlighted_line(
-                                    b.rope(),
-                                    self.editor
-                                        .syntax_states
-                                        .get(buf_id)
-                                        .and_then(|s| s.as_ref()),
-                                    &self.editor.loader,
-                                    line,
-                                )
-                            })
-                            .or_else(|| {
-                                let cached =
-                                    file_cache.entry(path_str.clone()).or_insert_with(|| {
-                                        load_file_for_preview(&path, &self.editor.loader)
-                                    });
-                                if let Some((rope, syntax)) = cached.as_ref() {
-                                    highlighted_line(
-                                        rope,
-                                        syntax.as_ref(),
-                                        &self.editor.loader,
-                                        line,
-                                    )
-                                } else {
-                                    None
-                                }
-                            })
-                            .unwrap_or((None, vec![]));
-
-                        PickerItem {
-                            match_text: format!("{}:{}:{}", display_path, line + 1, col + 1),
-                            display: format!("{}:{}", line + 1, col + 1),
-                            detail,
-                            detail_spans,
-                            group: Some(display_path),
-                            action: EditorAction::OpenFileAtPosition {
-                                path: path.clone(),
-                                line,
-                                col,
-                            },
-                            preview_action: None,
-                        }
-                    })
-                    .collect();
                 let restore = Some(self.editor.workspace().window().buffer_id);
-                self.picker = Some(Picker::new(label, items, restore));
+                self.picker = Some(crate::picker::sources::lsp_location_picker(
+                    &locations,
+                    label,
+                    &cwd,
+                    &self.editor.buffers,
+                    &self.editor.syntax_states,
+                    &self.editor.loader,
+                    restore,
+                ));
             }
         }
     }
 
     fn open_picker(&mut self, action: EditorAction) {
         let restore = Some(self.editor.workspace().window().buffer_id);
+        let cwd = self.editor.workspace().cwd.clone();
         match action {
             EditorAction::OpenBufferPicker => {
-                let cwd = self.editor.workspace().cwd.clone();
-                let items: Vec<PickerItem> = self
-                    .editor
-                    .buffers
-                    .iter()
-                    .enumerate()
-                    .map(|(id, buf)| {
-                        let modified = if buf.is_modified() { " [+]" } else { "" };
-                        let name = format!("{}{}", buf.name(), modified);
-                        let detail = buf.file_path().map(|p| {
-                            Path::new(p)
-                                .strip_prefix(&cwd)
-                                .unwrap_or(Path::new(p))
-                                .display()
-                                .to_string()
-                        });
-                        PickerItem {
-                            match_text: name.clone(),
-                            display: name,
-                            detail,
-                            detail_spans: vec![],
-                            group: None,
-                            action: EditorAction::SwitchToBuffer(id),
-                            preview_action: Some(EditorAction::SwitchToBuffer(id)),
-                        }
-                    })
-                    .collect();
-                self.picker = Some(Picker::new("Buffers", items, restore));
+                self.picker =
+                    Some(crate::picker::sources::buffer_picker(&self.editor.buffers, &cwd, restore));
+                // Preview the first selected buffer
                 if let Some(picker) = &self.picker
                     && let Some(item) = picker.selected_item()
                     && let Some(action) = item.preview_action.clone()
@@ -679,43 +546,8 @@ impl Remax {
                 show_ignored,
                 max_results,
             } => {
-                let cwd = self.editor.workspace().cwd.clone();
-                let files = ignore::WalkBuilder::new(&cwd)
-                    .git_ignore(!show_ignored)
-                    .git_exclude(!show_ignored)
-                    .filter_entry(|entry| {
-                        let custom_ignores = [".git", "target", "node_modules", "dist", "build"];
-                        let file_name = entry.file_name().to_string_lossy();
-                        !custom_ignores.contains(&file_name.as_ref())
-                    })
-                    .build()
-                    .filter_map(|entry| entry.ok())
-                    .take(max_results)
-                    .filter(|entry| entry.file_type().map(|ft| ft.is_file()).unwrap_or(false))
-                    .map(|entry| {
-                        let path = entry.into_path();
-                        let rel = path.strip_prefix(&cwd).unwrap_or(&path).to_path_buf();
-                        let file_name = rel
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string();
-                        let dir = rel
-                            .parent()
-                            .map(|p| p.display().to_string())
-                            .filter(|s| !s.is_empty());
-                        PickerItem {
-                            match_text: rel.display().to_string(),
-                            display: file_name,
-                            detail: dir,
-                            detail_spans: vec![],
-                            group: None,
-                            action: EditorAction::OpenFile(path),
-                            preview_action: None,
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                self.picker = Some(Picker::new("Project Files", files, restore));
+                self.picker =
+                    Some(crate::picker::sources::file_picker(&cwd, show_ignored, max_results, restore));
             }
             _ => {}
         }
@@ -846,146 +678,6 @@ fn parse_args() -> Vec<String> {
     } else {
         Vec::new()
     }
-}
-
-fn load_file_for_preview(
-    path: &Path,
-    loader: &Loader,
-) -> Option<(ropey::Rope, Option<SyntaxState>)> {
-    let content = read_to_string(path).ok()?;
-    let rope = Rope::from_str(&content);
-    let ext = path.extension().and_then(|e| e.to_str());
-    let syntax = ext
-        .and_then(|ext| loader.language_for_extension(ext))
-        .and_then(|lang| SyntaxState::new(&rope, lang, loader));
-    Some((rope, syntax))
-}
-
-fn highlighted_line(
-    rope: &ropey::Rope,
-    syntax: Option<&SyntaxState>,
-    loader: &Loader,
-    line: usize,
-) -> Option<(Option<String>, Vec<DetailSpan>)> {
-    if line >= rope.len_lines() {
-        return None;
-    }
-
-    let line_text: String = rope.line(line).chars().collect();
-    let trimmed = line_text.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let detail = if trimmed.len() > 120 {
-        format!("{}…", &trimmed[..119])
-    } else {
-        trimmed.to_string()
-    };
-
-    let syntax = match syntax {
-        Some(s) => s,
-        None => {
-            let default_color = iced::Color::from_rgb(0.65, 0.65, 0.7);
-            return Some((
-                Some(detail.clone()),
-                vec![DetailSpan {
-                    text: detail,
-                    color: default_color,
-                }],
-            ));
-        }
-    };
-
-    let leading_ws = line_text.len() - line_text.trim_start().len();
-    let line_byte_start = rope.line_to_byte(line);
-    let line_byte_end = if line + 1 < rope.len_lines() {
-        rope.line_to_byte(line + 1)
-    } else {
-        rope.len_bytes()
-    };
-
-    let highlights =
-        syntax.highlights_for_range(rope, loader, line_byte_start as u32, line_byte_end as u32);
-
-    let default_color = iced::Color::from_rgb(0.75, 0.75, 0.8);
-
-    if highlights.is_empty() {
-        return Some((
-            Some(detail.clone()),
-            vec![DetailSpan {
-                text: detail,
-                color: iced::Color::from_rgb(0.65, 0.65, 0.7),
-            }],
-        ));
-    }
-
-    let trim_byte_start = line_byte_start + leading_ws;
-    let trim_byte_end =
-        (line_byte_start + line_text.trim_end_matches('\n').len()).min(line_byte_end);
-
-    if trim_byte_start >= trim_byte_end {
-        return Some((
-            Some(detail.clone()),
-            vec![DetailSpan {
-                text: detail,
-                color: default_color,
-            }],
-        ));
-    }
-
-    let mut spans = Vec::new();
-    let mut pos = trim_byte_start;
-
-    for hl in &highlights {
-        let span_start = (hl.byte_start as usize).max(trim_byte_start);
-        let span_end = (hl.byte_end as usize).min(trim_byte_end);
-        if span_start >= span_end {
-            continue;
-        }
-        if pos < span_start {
-            let chunk = rope_byte_slice(rope, pos, span_start);
-            if !chunk.is_empty() {
-                spans.push(DetailSpan {
-                    text: chunk,
-                    color: default_color,
-                });
-            }
-        }
-        let chunk = rope_byte_slice(rope, span_start, span_end);
-        if !chunk.is_empty() {
-            spans.push(DetailSpan {
-                text: chunk,
-                color: hl.color,
-            });
-        }
-        pos = span_end;
-    }
-
-    if pos < trim_byte_end {
-        let chunk = rope_byte_slice(rope, pos, trim_byte_end);
-        if !chunk.is_empty() {
-            spans.push(DetailSpan {
-                text: chunk,
-                color: default_color,
-            });
-        }
-    }
-
-    if spans.is_empty() {
-        spans.push(DetailSpan {
-            text: detail.clone(),
-            color: default_color,
-        });
-    }
-
-    Some((Some(detail), spans))
-}
-
-fn rope_byte_slice(rope: &ropey::Rope, start: usize, end: usize) -> String {
-    let char_start = rope.byte_to_char(start);
-    let char_end = rope.byte_to_char(end.min(rope.len_bytes()));
-    rope.slice(char_start..char_end).chars().collect()
 }
 
 fn create_scratch_buffer() -> Buffer {
