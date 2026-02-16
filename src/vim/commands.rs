@@ -87,18 +87,18 @@ pub fn resolve(
         Command::InsertNewline => vec![EditorAction::InsertNewline],
         Command::InsertTab => vec![EditorAction::InsertTab],
 
-        Command::VimEnterInsert => input.enter_insert(),
+        Command::VimEnterInsertMode => input.enter_insert(),
         Command::VimEnterInsertAfter => input.enter_insert_after(),
         Command::VimEnterInsertLineEnd => input.enter_insert_line_end(),
         Command::VimEnterInsertLineStart => input.enter_insert_line_start(),
         Command::VimOpenBelow => input.open_below(),
         Command::VimOpenAbove => input.open_above(),
-        Command::VimExitInsert => input.exit_insert(),
-        Command::VimEnterCommand => {
+        Command::VimExitInsertMode => input.exit_insert(),
+        Command::VimEnterCommandMode => {
             input.enter_command();
             vec![]
         }
-        Command::VimEnterVisual => {
+        Command::VimEnterVisualMode => {
             input.enter_visual(cursor);
             vec![]
         }
@@ -106,9 +106,9 @@ pub fn resolve(
             input.enter_visual_line(cursor);
             vec![]
         }
-        Command::VimExitVisual => input.exit_visual(),
+        Command::VimExitVisualMode => input.exit_visual(),
         Command::VimClearSearch => vec![EditorAction::ClearSearch],
-        Command::VimEnterSearch => {
+        Command::VimEnterSearchMode => {
             input.enter_search();
             vec![]
         }

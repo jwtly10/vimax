@@ -7,10 +7,6 @@ use crate::action::Motion;
 
 use super::mode::VimMode;
 
-// ---------------------------------------------------------------------------
-// Command enum – replaces all &'static str CommandId values
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[allow(dead_code)]
 pub enum Command {
@@ -54,19 +50,19 @@ pub enum Command {
     OpYank,
 
     // Vim mode transitions
-    VimEnterInsert,
+    VimEnterInsertMode,
     VimEnterInsertAfter,
     VimEnterInsertLineEnd,
     VimEnterInsertLineStart,
     VimOpenBelow,
     VimOpenAbove,
-    VimExitInsert,
-    VimEnterCommand,
-    VimEnterVisual,
+    VimExitInsertMode,
+    VimEnterCommandMode,
+    VimEnterVisualMode,
     VimEnterVisualLine,
-    VimExitVisual,
+    VimExitVisualMode,
     VimClearSearch,
-    VimEnterSearch,
+    VimEnterSearchMode,
 
     // Find-char motions
     MotionFindCharForward,
@@ -122,7 +118,6 @@ pub enum Command {
 }
 
 impl Command {
-    /// Returns `true` for the three operator commands (d / c / y).
     pub fn is_operator(self) -> bool {
         matches!(
             self,
@@ -131,7 +126,7 @@ impl Command {
     }
 
     /// If this command represents a cursor motion, return the corresponding
-    /// `Motion` value and whether the motion is inclusive (for operator use).
+    /// `Motion` value and whether the motion is inclusive
     pub fn as_motion(self) -> Option<(Motion, bool)> {
         match self {
             Command::CursorMoveLeft => Some((Motion::Left, false)),
@@ -161,10 +156,6 @@ impl Command {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// KeyPress / KeyId – unchanged
-// ---------------------------------------------------------------------------
 
 const LEADER_KEY: KeyPress = KeyPress {
     key: KeyId::Named(keyboard::key::Named::Space),
@@ -245,10 +236,6 @@ impl KeyPress {
     }
 }
 
-// ---------------------------------------------------------------------------
-// KeymapLookup / Keymap – now uses Command instead of CommandId
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeymapLookup {
     Match(Command),
@@ -292,11 +279,6 @@ impl Keymap {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Declarative keybindings macro
-// ---------------------------------------------------------------------------
-
-/// Which mode-set a binding belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BindingScope {
     /// Available in normal, visual, and insert (arrow keys, etc.)
@@ -342,10 +324,6 @@ macro_rules! keybindings {
         ]
     };
 }
-
-// ---------------------------------------------------------------------------
-// Keymaps – built from the declarative table
-// ---------------------------------------------------------------------------
 
 pub struct Keymaps {
     global: Keymap,
@@ -476,17 +454,17 @@ fn all_bindings() -> Vec<AnnotatedBinding> {
         NormalOnly => [KeyPress::char('y')]                 => Command::OpYank,
         NormalOnly => [KeyPress::char('p')]                 => Command::EditPasteAfter,
         NormalOnly => [KeyPress::char('P')]                 => Command::EditPasteBefore,
-        NormalOnly => [KeyPress::char('i')]                 => Command::VimEnterInsert,
+        NormalOnly => [KeyPress::char('i')]                 => Command::VimEnterInsertMode,
         NormalOnly => [KeyPress::char('a')]                 => Command::VimEnterInsertAfter,
         NormalOnly => [KeyPress::char('A')]                 => Command::VimEnterInsertLineEnd,
         NormalOnly => [KeyPress::char('I')]                 => Command::VimEnterInsertLineStart,
         NormalOnly => [KeyPress::char('o')]                 => Command::VimOpenBelow,
         NormalOnly => [KeyPress::char('O')]                 => Command::VimOpenAbove,
-        NormalOnly => [KeyPress::char('v')]                 => Command::VimEnterVisual,
+        NormalOnly => [KeyPress::char('v')]                 => Command::VimEnterVisualMode,
         NormalOnly => [KeyPress::char('V')]                 => Command::VimEnterVisualLine,
-        NormalOnly => [KeyPress::char(':')]                 => Command::VimEnterCommand,
+        NormalOnly => [KeyPress::char(':')]                 => Command::VimEnterCommandMode,
         NormalOnly => [KeyPress::named(Named::Escape)]      => Command::VimClearSearch,
-        NormalOnly => [KeyPress::char('/')]                 => Command::VimEnterSearch,
+        NormalOnly => [KeyPress::char('/')]                 => Command::VimEnterSearchMode,
         NormalOnly => [KeyPress::char('n')]                 => Command::SearchNext,
         NormalOnly => [KeyPress::char('N')]                 => Command::SearchPrev,
         NormalOnly => [KeyPress::char('r')]                 => Command::EditReplaceChar,
@@ -496,12 +474,12 @@ fn all_bindings() -> Vec<AnnotatedBinding> {
         VisualOnly => [KeyPress::char('x')]                 => Command::VisualDelete,
         VisualOnly => [KeyPress::char('y')]                 => Command::VisualYank,
         VisualOnly => [KeyPress::char('c')]                 => Command::VisualChange,
-        VisualOnly => [KeyPress::named(Named::Escape)]      => Command::VimExitVisual,
-        VisualOnly => [KeyPress::char('v')]                 => Command::VimExitVisual,
+        VisualOnly => [KeyPress::named(Named::Escape)]      => Command::VimExitVisualMode,
+        VisualOnly => [KeyPress::char('v')]                 => Command::VimExitVisualMode,
         VisualOnly => [KeyPress::char('V')]                 => Command::VimEnterVisualLine,
 
         // ── Insert only ─────────────────────────────────────────────────
-        InsertOnly => [KeyPress::named(Named::Escape)]      => Command::VimExitInsert,
+        InsertOnly => [KeyPress::named(Named::Escape)]      => Command::VimExitInsertMode,
         InsertOnly => [KeyPress::named(Named::Backspace)]   => Command::InsertBackspace,
         InsertOnly => [KeyPress::named(Named::Delete)]      => Command::InsertDelete,
         InsertOnly => [KeyPress::named(Named::Enter)]       => Command::InsertNewline,
