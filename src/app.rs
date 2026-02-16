@@ -18,7 +18,7 @@ use iced::futures::SinkExt;
 use iced::futures::stream::BoxStream;
 use iced::keyboard;
 use iced::widget::Space;
-use iced::widget::{column, container, rich_text, row, span, text};
+use iced::widget::{column, container, row, text};
 use iced::{Element, Length, Subscription, Task, Theme, event, window};
 use lsp_types::notification::{DidOpenTextDocument, Initialized};
 use lsp_types::{DidOpenTextDocumentParams, InitializedParams};
@@ -186,7 +186,6 @@ impl Remax {
                 modifiers,
                 text,
             } => {
-                // Handle Picker events
                 if self.picker.is_some() {
                     return self.handle_picker_key(&key, &modifiers, text.as_deref());
                 }
@@ -455,132 +454,7 @@ impl Remax {
         .padding([2, 0]);
 
         let bottom_section: Element<'_, Message> = if let Some(picker) = &self.picker {
-            let input_row = container(
-                row![
-                    text(format!(" {} ", picker.title))
-                        .size(13)
-                        .color(iced::Color::from_rgb(0.6, 0.7, 0.9)),
-                    container(
-                        text(if picker.query.is_empty() {
-                            String::from("  Type to filter…")
-                        } else {
-                            format!("  {}", picker.query)
-                        })
-                        .size(14)
-                        .color(if picker.query.is_empty() {
-                            iced::Color::from_rgb(0.4, 0.4, 0.4)
-                        } else {
-                            iced::Color::from_rgb(0.95, 0.95, 0.8)
-                        }),
-                    )
-                    .width(Length::Fill),
-                    text(format!("{}/{} ", picker.filtered.len(), picker.items.len()))
-                        .size(13)
-                        .color(iced::Color::from_rgb(0.45, 0.45, 0.45)),
-                ]
-                .align_y(iced::Alignment::Center),
-            )
-            .width(Length::Fill)
-            .padding([3, 2])
-            .style(|_theme: &Theme| container::Style {
-                background: Some(iced::Background::Color(iced::Color::from_rgb(
-                    0.13, 0.13, 0.17,
-                ))),
-                ..Default::default()
-            });
-
-            let separator = container(Space::new())
-                .width(Length::Fill)
-                .height(Length::Fixed(1.0))
-                .style(|_theme: &Theme| container::Style {
-                    background: Some(iced::Background::Color(iced::Color::from_rgb(
-                        0.25, 0.25, 0.3,
-                    ))),
-                    ..Default::default()
-                });
-
-            let mut items_col = column![];
-            let mut current_group: Option<&str> = None;
-            for (i, &item_idx) in picker.visible_items() {
-                let item = &picker.items[item_idx];
-
-                if let Some(group) = &item.group {
-                    if current_group != Some(group.as_str()) {
-                        current_group = Some(group.as_str());
-                        let header = container(
-                            text(format!("  {}", group))
-                                .size(12)
-                                .color(iced::Color::from_rgb(0.5, 0.6, 0.8)),
-                        )
-                        .width(Length::Fill)
-                        .padding([2, 4]);
-                        items_col = items_col.push(header);
-                    }
-                }
-
-                let is_selected = i == picker.selected;
-                let indicator = if is_selected { " ▸ " } else { "   " };
-
-                let display_text = text(format!("{}{}", indicator, item.display))
-                    .size(14)
-                    .color(if is_selected {
-                        iced::Color::from_rgb(1.0, 1.0, 1.0)
-                    } else {
-                        iced::Color::from_rgb(0.75, 0.75, 0.75)
-                    });
-
-                let item_row = if !item.detail_spans.is_empty() {
-                    let dim: f32 = if is_selected { 1.0 } else { 0.55 };
-                    let spans: Vec<iced::widget::text::Span<'_, (), _>> = item
-                        .detail_spans
-                        .iter()
-                        .map(|ds| {
-                            span(ds.text.as_str())
-                                .color(iced::Color::from_rgba(
-                                    ds.color.r * dim,
-                                    ds.color.g * dim,
-                                    ds.color.b * dim,
-                                    1.0,
-                                ))
-                                .size(13)
-                        })
-                        .collect();
-                    row![
-                        display_text,
-                        Space::new().width(Length::Fixed(12.0)),
-                        rich_text(spans).font(iced::Font::MONOSPACE),
-                    ]
-                    .align_y(iced::Alignment::Center)
-                } else if let Some(detail) = &item.detail {
-                    row![
-                        display_text,
-                        Space::new().width(Length::Fixed(12.0)),
-                        text(detail.as_str()).size(13).color(if is_selected {
-                            iced::Color::from_rgb(0.55, 0.6, 0.7)
-                        } else {
-                            iced::Color::from_rgb(0.38, 0.38, 0.42)
-                        }),
-                    ]
-                    .align_y(iced::Alignment::Center)
-                } else {
-                    row![display_text].align_y(iced::Alignment::Center)
-                };
-
-                let row_widget = container(item_row).width(Length::Fill).padding([2, 4]);
-                let row_widget = if is_selected {
-                    row_widget.style(|_theme: &Theme| container::Style {
-                        background: Some(iced::Background::Color(iced::Color::from_rgb(
-                            0.2, 0.28, 0.42,
-                        ))),
-                        ..Default::default()
-                    })
-                } else {
-                    row_widget
-                };
-                items_col = items_col.push(row_widget);
-            }
-
-            column![input_row, separator, items_col].into()
+            picker.view()
         } else {
             let cmdline_text = self
                 .vim
