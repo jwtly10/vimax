@@ -55,7 +55,21 @@ pub fn text_grid<'a>(
     })
 }
 
+#[derive(Debug, Default)]
+struct TextGridState {
+    last_visible_lines: usize,
+    last_visible_cols: usize,
+}
+
 impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'a> {
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<TextGridState>()
+    }
+
+    fn state(&self) -> widget::tree::State {
+        widget::tree::State::new(TextGridState::default())
+    }
+
     fn size(&self) -> Size<Length> {
         Size {
             width: Length::Fill,
@@ -75,7 +89,7 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
 
     fn update(
         &mut self,
-        _tree: &mut widget::Tree,
+        tree: &mut widget::Tree,
         event: &Event,
         layout: iced::advanced::Layout<'_>,
         cursor: mouse::Cursor,
@@ -90,11 +104,17 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
         let visible_lines = (bounds.height / LINE_HEIGHT) as usize;
         let text_area_width = bounds.width - GUTTER_WIDTH - 8.0;
         let visible_cols = (text_area_width / CHAR_WIDTH).max(1.0) as usize;
-        shell.publish(crate::app::Message::ViewportResized {
-            lines: visible_lines,
-            cols: visible_cols,
-            window_id: wid,
-        });
+
+        let state = tree.state.downcast_mut::<TextGridState>();
+        if state.last_visible_lines != visible_lines || state.last_visible_cols != visible_cols {
+            state.last_visible_lines = visible_lines;
+            state.last_visible_cols = visible_cols;
+            shell.publish(crate::app::Message::ViewportResized {
+                lines: visible_lines,
+                cols: visible_cols,
+                window_id: wid,
+            });
+        }
 
         match event {
             Event::Mouse(mouse::Event::WheelScrolled { delta }) => {

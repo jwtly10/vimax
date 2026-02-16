@@ -9,7 +9,9 @@ use crate::layout::{LayoutNode, SplitDirection};
 use crate::lsp::LspIncoming;
 use crate::picker::{Picker, PickerEvent};
 use crate::text_grid;
-use crate::toast::{ToastLevel, ToastManager};
+use crate::ui;
+use crate::ui::scrollbar::ScrollbarMarker;
+use crate::ui::toast::{ToastLevel, ToastManager};
 use crate::vim::VimLayer;
 
 use iced::advanced::subscription::{self, Recipe};
@@ -62,6 +64,14 @@ pub enum Message {
     Lsp {
         server_id: usize,
         message: String,
+    },
+    ScrollbarJump {
+        line: usize,
+        window_id: usize,
+    },
+    ScrollbarDrag {
+        scroll_y: usize,
+        window_id: usize,
     },
     ToastTick(Instant),
     DismissToast(usize),
@@ -271,6 +281,29 @@ impl Remax {
                         SCROLL_SPEED,
                         max_len,
                     );
+                }
+            }
+            Message::ScrollbarJump { line, window_id } => {
+                let ws = self.editor.workspace_mut();
+                ws.active_window = window_id;
+                if window_id < ws.windows.len() {
+                    let buf_id = ws.windows[window_id].buffer_id;
+                    let (_, cur_col) = self.editor.buffers[buf_id]
+                        .cursor_position(self.editor.workspace().windows[window_id].cursor);
+                    let new_cursor =
+                        self.editor.buffers[buf_id].cursor_from_position(line, cur_col);
+                    self.editor.workspace_mut().windows[window_id].cursor = new_cursor;
+                    self.editor.ensure_cursor_visible();
+                }
+            }
+            Message::ScrollbarDrag { scroll_y, window_id } => {
+                let ws = self.editor.workspace_mut();
+                if window_id < ws.windows.len() {
+                    let buf_id = ws.windows[window_id].buffer_id;
+                    let total = self.editor.buffers[buf_id].total_lines();
+                    let max_scroll = total.saturating_sub(1);
+                    self.editor.workspace_mut().windows[window_id].scroll_y =
+                        scroll_y.min(max_scroll);
                 }
             }
             Message::MouseClick { x, y, window_id } => {
@@ -649,6 +682,23 @@ impl Remax {
         Task::none()
     }
 
+    fn build_scrollbar_markers(
+        &self,
+        win: &crate::window::Window,
+        buffer: &Buffer,
+    ) -> Vec<ScrollbarMarker> {
+        let mut markers = Vec::new();
+        for &char_pos in &win.search_matches {
+            if char_pos < buffer.len_chars() {
+                markers.push(ScrollbarMarker {
+                    line: buffer.char_to_line(char_pos),
+                    color: iced::Color::from_rgba(0.9, 0.7, 0.2, 0.9),
+                });
+            }
+        }
+        markers
+    }
+
     fn build_layout_view<'a>(
         &'a self,
         node: &LayoutNode,
@@ -693,10 +743,21 @@ impl Remax {
                     highlights,
                 );
 
-                container(grid)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into()
+                let markers = self.build_scrollbar_markers(win, buffer);
+                let sb = ui::scrollbar::scrollbar(
+                    win.scroll_y,
+                    win.visible_lines,
+                    buffer.total_lines(),
+                    markers,
+                    *win_id,
+                    is_active,
+                );
+
+                row![
+                    container(grid).width(Length::Fill).height(Length::Fill),
+                    sb,
+                ]
+                .into()
             }
             LayoutNode::Split {
                 direction,
