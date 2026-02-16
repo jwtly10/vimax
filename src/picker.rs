@@ -6,9 +6,17 @@ use nucleo_matcher::{
 use crate::action::EditorAction;
 
 #[derive(Debug, Clone)]
+pub struct DetailSpan {
+    pub text: String,
+    pub color: iced::Color,
+}
+
+#[derive(Debug, Clone)]
 pub struct PickerItem {
     pub match_text: String,
     pub display: String,
+    pub detail: Option<String>,
+    pub detail_spans: Vec<DetailSpan>,
     pub group: Option<String>,
     pub action: EditorAction,
     pub preview_action: Option<EditorAction>,
@@ -116,13 +124,4 @@ impl Picker {
         self.filtered.get(self.selected).map(|&i| &self.items[i])
     }
 
-    pub fn status_line(&self) -> String {
-        format!(
-            "{} ({}/{}): {}",
-            self.title,
-            self.filtered.len(),
-            self.items.len(),
-            self.query
-        )
-    }
 }

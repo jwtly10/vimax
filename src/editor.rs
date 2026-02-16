@@ -842,17 +842,6 @@ impl Editor {
         self.window_mut().cursor = new_cursor;
     }
 
-    pub fn buffer_list(&self) -> Vec<(usize, String)> {
-        self.buffers
-            .iter()
-            .enumerate()
-            .map(|(i, b)| {
-                let modified = if b.is_modified() { " [+]" } else { "" };
-                (i, format!("{}{}", b.name(), modified))
-            })
-            .collect()
-    }
-
     pub fn has_unsaved_changes(&self) -> bool {
         self.buffers.iter().any(|b| b.is_modified())
     }

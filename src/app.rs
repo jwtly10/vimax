@@ -1,23 +1,27 @@
+use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 
 use crate::action::{EditorAction, EditorEffect};
 use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::layout::{LayoutNode, SplitDirection};
-use crate::lsp::{lsp_position_to_offset, LspIncoming};
-use crate::picker::{Picker, PickerItem};
+use crate::lsp::{LspIncoming, lsp_position_to_offset};
+use crate::picker::{DetailSpan, Picker, PickerItem};
+use crate::syntax::SyntaxState;
+use crate::syntax::loader::Loader;
 use crate::text_grid;
 use crate::vim::VimLayer;
 
 use iced::advanced::subscription::{self, Recipe};
-use iced::futures::stream::BoxStream;
 use iced::futures::SinkExt;
+use iced::futures::stream::BoxStream;
 use iced::keyboard;
 use iced::widget::Space;
-use iced::widget::{column, container, row, text};
-use iced::{event, window, Element, Length, Subscription, Task, Theme};
+use iced::widget::{column, container, rich_text, row, span, text};
+use iced::{Element, Length, Subscription, Task, Theme, event, window};
 use lsp_types::notification::{DidOpenTextDocument, Initialized};
 use lsp_types::{DidOpenTextDocumentParams, InitializedParams};
+use ropey::Rope;
 use smol::channel::Receiver;
 use tracing::{debug, info};
 
@@ -449,13 +453,49 @@ impl Remax {
         .padding([2, 0]);
 
         let bottom_section: Element<'_, Message> = if let Some(picker) = &self.picker {
-            let prompt = container(
-                text(format!(" {}", picker.status_line()))
-                    .size(14)
-                    .color(iced::Color::from_rgb(0.9, 0.9, 0.5)),
+            let input_row = container(
+                row![
+                    text(format!(" {} ", picker.title))
+                        .size(13)
+                        .color(iced::Color::from_rgb(0.6, 0.7, 0.9)),
+                    container(
+                        text(if picker.query.is_empty() {
+                            String::from("  Type to filter…")
+                        } else {
+                            format!("  {}", picker.query)
+                        })
+                        .size(14)
+                        .color(if picker.query.is_empty() {
+                            iced::Color::from_rgb(0.4, 0.4, 0.4)
+                        } else {
+                            iced::Color::from_rgb(0.95, 0.95, 0.8)
+                        }),
+                    )
+                    .width(Length::Fill),
+                    text(format!("{}/{} ", picker.filtered.len(), picker.items.len()))
+                        .size(13)
+                        .color(iced::Color::from_rgb(0.45, 0.45, 0.45)),
+                ]
+                .align_y(iced::Alignment::Center),
             )
             .width(Length::Fill)
-            .padding([2, 0]);
+            .padding([3, 2])
+            .style(|_theme: &Theme| container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgb(
+                    0.13, 0.13, 0.17,
+                ))),
+                ..Default::default()
+            });
+
+            let separator = container(Space::new())
+                .width(Length::Fill)
+                .height(Length::Fixed(1.0))
+                .style(|_theme: &Theme| container::Style {
+                    background: Some(iced::Background::Color(iced::Color::from_rgb(
+                        0.25, 0.25, 0.3,
+                    ))),
+                    ..Default::default()
+                });
 
             let mut items_col = column![];
             let mut current_group: Option<&str> = None;
@@ -466,34 +506,69 @@ impl Remax {
                     if current_group != Some(group.as_str()) {
                         current_group = Some(group.as_str());
                         let header = container(
-                            text(format!("--- {} ---", group))
-                                .size(13)
-                                .color(iced::Color::from_rgb(0.5, 0.5, 0.5)),
+                            text(format!("  {}", group))
+                                .size(12)
+                                .color(iced::Color::from_rgb(0.5, 0.6, 0.8)),
                         )
                         .width(Length::Fill)
-                        .padding([1, 3]);
+                        .padding([2, 4]);
                         items_col = items_col.push(header);
                     }
                 }
 
                 let is_selected = i == picker.selected;
-                let label = if is_selected {
-                    format!(" > {}", item.display)
+                let indicator = if is_selected { " ▸ " } else { "   " };
+
+                let display_text = text(format!("{}{}", indicator, item.display))
+                    .size(14)
+                    .color(if is_selected {
+                        iced::Color::from_rgb(1.0, 1.0, 1.0)
+                    } else {
+                        iced::Color::from_rgb(0.75, 0.75, 0.75)
+                    });
+
+                let item_row = if !item.detail_spans.is_empty() {
+                    let dim: f32 = if is_selected { 1.0 } else { 0.55 };
+                    let spans: Vec<iced::widget::text::Span<'_, (), _>> = item
+                        .detail_spans
+                        .iter()
+                        .map(|ds| {
+                            span(ds.text.as_str())
+                                .color(iced::Color::from_rgba(
+                                    ds.color.r * dim,
+                                    ds.color.g * dim,
+                                    ds.color.b * dim,
+                                    1.0,
+                                ))
+                                .size(13)
+                        })
+                        .collect();
+                    row![
+                        display_text,
+                        Space::new().width(Length::Fixed(12.0)),
+                        rich_text(spans).font(iced::Font::MONOSPACE),
+                    ]
+                    .align_y(iced::Alignment::Center)
+                } else if let Some(detail) = &item.detail {
+                    row![
+                        display_text,
+                        Space::new().width(Length::Fixed(12.0)),
+                        text(detail.as_str()).size(13).color(if is_selected {
+                            iced::Color::from_rgb(0.55, 0.6, 0.7)
+                        } else {
+                            iced::Color::from_rgb(0.38, 0.38, 0.42)
+                        }),
+                    ]
+                    .align_y(iced::Alignment::Center)
                 } else {
-                    format!("   {}", item.display)
+                    row![display_text].align_y(iced::Alignment::Center)
                 };
-                let text_color = if is_selected {
-                    iced::Color::from_rgb(1.0, 1.0, 1.0)
-                } else {
-                    iced::Color::from_rgb(0.6, 0.6, 0.6)
-                };
-                let row_widget = container(text(label).size(14).color(text_color))
-                    .width(Length::Fill)
-                    .padding([1, 3]);
+
+                let row_widget = container(item_row).width(Length::Fill).padding([2, 4]);
                 let row_widget = if is_selected {
                     row_widget.style(|_theme: &Theme| container::Style {
                         background: Some(iced::Background::Color(iced::Color::from_rgb(
-                            0.25, 0.35, 0.5,
+                            0.2, 0.28, 0.42,
                         ))),
                         ..Default::default()
                     })
@@ -503,7 +578,7 @@ impl Remax {
                 items_col = items_col.push(row_widget);
             }
 
-            column![prompt, items_col].into()
+            column![input_row, separator, items_col].into()
         } else {
             let cmdline_text = self
                 .vim
@@ -550,7 +625,9 @@ impl Remax {
             if arr[0].get("targetUri").is_some() {
                 return arr
                     .iter()
-                    .filter_map(|v| serde_json::from_value::<lsp_types::LocationLink>(v.clone()).ok())
+                    .filter_map(|v| {
+                        serde_json::from_value::<lsp_types::LocationLink>(v.clone()).ok()
+                    })
                     .map(|l| lsp_types::Location {
                         uri: l.target_uri,
                         range: l.target_selection_range,
@@ -602,6 +679,18 @@ impl Remax {
                 self.jump_to_lsp_location(loc);
             }
             _ => {
+                let mut locations = locations;
+                locations.sort_by(|a, b| {
+                    a.uri
+                        .path()
+                        .as_str()
+                        .cmp(b.uri.path().as_str())
+                        .then(a.range.start.line.cmp(&b.range.start.line))
+                });
+
+                let mut file_cache: HashMap<String, Option<(Rope, Option<SyntaxState>)>> =
+                    HashMap::new();
+
                 let items: Vec<PickerItem> = locations
                     .iter()
                     .map(|loc| {
@@ -613,9 +702,48 @@ impl Remax {
                             .to_string();
                         let line = loc.range.start.line as usize;
                         let col = loc.range.start.character as usize;
+                        let path_str = path.to_string_lossy().to_string();
+
+                        let (detail, detail_spans) = self
+                            .editor
+                            .buffers
+                            .iter()
+                            .enumerate()
+                            .find(|(_, b)| b.file_path() == Some(&path_str))
+                            .and_then(|(buf_id, b)| {
+                                highlighted_line(
+                                    b.rope(),
+                                    self.editor
+                                        .syntax_states
+                                        .get(buf_id)
+                                        .and_then(|s| s.as_ref()),
+                                    &self.editor.loader,
+                                    line,
+                                )
+                            })
+                            .or_else(|| {
+                                let cached =
+                                    file_cache.entry(path_str.clone()).or_insert_with(|| {
+                                        load_file_for_preview(&path, &self.editor.loader)
+                                    });
+                                if let Some((rope, syntax)) = cached {
+                                    highlighted_line(
+                                        rope,
+                                        syntax.as_ref(),
+                                        &self.editor.loader,
+                                        line,
+                                    )
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or((None, vec![]));
+
                         PickerItem {
                             match_text: format!("{}:{}:{}", display_path, line + 1, col + 1),
                             display: format!("{}:{}", line + 1, col + 1),
+                            detail,
+                            detail_spans,
                             group: Some(display_path),
                             action: EditorAction::OpenFileAtPosition {
                                 path: path.clone(),
@@ -636,15 +764,31 @@ impl Remax {
         let restore = Some(self.editor.workspace().window().buffer_id);
         match action {
             EditorAction::OpenBufferPicker => {
-                let buf_list = self.editor.buffer_list();
-                let items: Vec<PickerItem> = buf_list
-                    .into_iter()
-                    .map(|(id, label)| PickerItem {
-                        match_text: label.clone(),
-                        display: label,
-                        group: None,
-                        action: EditorAction::SwitchToBuffer(id),
-                        preview_action: Some(EditorAction::SwitchToBuffer(id)),
+                let cwd = self.editor.workspace().cwd.clone();
+                let items: Vec<PickerItem> = self
+                    .editor
+                    .buffers
+                    .iter()
+                    .enumerate()
+                    .map(|(id, buf)| {
+                        let modified = if buf.is_modified() { " [+]" } else { "" };
+                        let name = format!("{}{}", buf.name(), modified);
+                        let detail = buf.file_path().map(|p| {
+                            Path::new(p)
+                                .strip_prefix(&cwd)
+                                .unwrap_or(Path::new(p))
+                                .display()
+                                .to_string()
+                        });
+                        PickerItem {
+                            match_text: name.clone(),
+                            display: name,
+                            detail,
+                            detail_spans: vec![],
+                            group: None,
+                            action: EditorAction::SwitchToBuffer(id),
+                            preview_action: Some(EditorAction::SwitchToBuffer(id)),
+                        }
                     })
                     .collect();
                 self.picker = Some(Picker::new("Buffers", items, restore));
@@ -669,14 +813,21 @@ impl Remax {
                     .filter(|entry| entry.file_type().map(|ft| ft.is_file()).unwrap_or(false))
                     .map(|entry| {
                         let path = entry.into_path();
-                        let display = path
-                            .strip_prefix(&cwd)
-                            .unwrap_or(&path)
-                            .display()
+                        let rel = path.strip_prefix(&cwd).unwrap_or(&path).to_path_buf();
+                        let file_name = rel
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
                             .to_string();
+                        let dir = rel
+                            .parent()
+                            .map(|p| p.display().to_string())
+                            .filter(|s| !s.is_empty());
                         PickerItem {
-                            match_text: display.clone(),
-                            display,
+                            match_text: rel.display().to_string(),
+                            display: file_name,
+                            detail: dir,
+                            detail_spans: vec![],
                             group: None,
                             action: EditorAction::OpenFile(path),
                             preview_action: None,
@@ -864,6 +1015,146 @@ fn parse_args() -> Vec<String> {
     } else {
         Vec::new()
     }
+}
+
+fn load_file_for_preview(
+    path: &Path,
+    loader: &Loader,
+) -> Option<(ropey::Rope, Option<SyntaxState>)> {
+    let content = read_to_string(path).ok()?;
+    let rope = Rope::from_str(&content);
+    let ext = path.extension().and_then(|e| e.to_str());
+    let syntax = ext
+        .and_then(|ext| loader.language_for_extension(ext))
+        .and_then(|lang| SyntaxState::new(&rope, lang, loader));
+    Some((rope, syntax))
+}
+
+fn highlighted_line(
+    rope: &ropey::Rope,
+    syntax: Option<&SyntaxState>,
+    loader: &Loader,
+    line: usize,
+) -> Option<(Option<String>, Vec<DetailSpan>)> {
+    if line >= rope.len_lines() {
+        return None;
+    }
+
+    let line_text: String = rope.line(line).chars().collect();
+    let trimmed = line_text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let detail = if trimmed.len() > 120 {
+        format!("{}…", &trimmed[..119])
+    } else {
+        trimmed.to_string()
+    };
+
+    let syntax = match syntax {
+        Some(s) => s,
+        None => {
+            let default_color = iced::Color::from_rgb(0.65, 0.65, 0.7);
+            return Some((
+                Some(detail.clone()),
+                vec![DetailSpan {
+                    text: detail,
+                    color: default_color,
+                }],
+            ));
+        }
+    };
+
+    let leading_ws = line_text.len() - line_text.trim_start().len();
+    let line_byte_start = rope.line_to_byte(line);
+    let line_byte_end = if line + 1 < rope.len_lines() {
+        rope.line_to_byte(line + 1)
+    } else {
+        rope.len_bytes()
+    };
+
+    let highlights =
+        syntax.highlights_for_range(rope, loader, line_byte_start as u32, line_byte_end as u32);
+
+    let default_color = iced::Color::from_rgb(0.75, 0.75, 0.8);
+
+    if highlights.is_empty() {
+        return Some((
+            Some(detail.clone()),
+            vec![DetailSpan {
+                text: detail,
+                color: iced::Color::from_rgb(0.65, 0.65, 0.7),
+            }],
+        ));
+    }
+
+    let trim_byte_start = line_byte_start + leading_ws;
+    let trim_byte_end =
+        (line_byte_start + line_text.trim_end_matches('\n').len()).min(line_byte_end);
+
+    if trim_byte_start >= trim_byte_end {
+        return Some((
+            Some(detail.clone()),
+            vec![DetailSpan {
+                text: detail,
+                color: default_color,
+            }],
+        ));
+    }
+
+    let mut spans = Vec::new();
+    let mut pos = trim_byte_start;
+
+    for hl in &highlights {
+        let span_start = (hl.byte_start as usize).max(trim_byte_start);
+        let span_end = (hl.byte_end as usize).min(trim_byte_end);
+        if span_start >= span_end {
+            continue;
+        }
+        if pos < span_start {
+            let chunk = rope_byte_slice(rope, pos, span_start);
+            if !chunk.is_empty() {
+                spans.push(DetailSpan {
+                    text: chunk,
+                    color: default_color,
+                });
+            }
+        }
+        let chunk = rope_byte_slice(rope, span_start, span_end);
+        if !chunk.is_empty() {
+            spans.push(DetailSpan {
+                text: chunk,
+                color: hl.color,
+            });
+        }
+        pos = span_end;
+    }
+
+    if pos < trim_byte_end {
+        let chunk = rope_byte_slice(rope, pos, trim_byte_end);
+        if !chunk.is_empty() {
+            spans.push(DetailSpan {
+                text: chunk,
+                color: default_color,
+            });
+        }
+    }
+
+    if spans.is_empty() {
+        spans.push(DetailSpan {
+            text: detail.clone(),
+            color: default_color,
+        });
+    }
+
+    Some((Some(detail), spans))
+}
+
+fn rope_byte_slice(rope: &ropey::Rope, start: usize, end: usize) -> String {
+    let char_start = rope.byte_to_char(start);
+    let char_end = rope.byte_to_char(end.min(rope.len_bytes()));
+    rope.slice(char_start..char_end).chars().collect()
 }
 
 fn create_scratch_buffer() -> Buffer {
