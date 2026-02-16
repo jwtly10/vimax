@@ -1,3 +1,4 @@
+use iced::keyboard;
 use nucleo_matcher::{
     Config, Matcher, Utf32Str,
     pattern::{CaseMatching, Normalization, Pattern},
@@ -9,6 +10,13 @@ use crate::action::EditorAction;
 pub struct DetailSpan {
     pub text: String,
     pub color: iced::Color,
+}
+
+pub enum PickerEvent {
+    Select(EditorAction),
+    Cancel(Option<usize>),
+    PreviewChanged(Option<EditorAction>),
+    Noop,
 }
 
 #[derive(Debug, Clone)]
@@ -124,4 +132,71 @@ impl Picker {
         self.filtered.get(self.selected).map(|&i| &self.items[i])
     }
 
+    /// Handles any key events into the Picker process
+    /// and returns what action should be taken by the caller (selecting an item, canceling, etc.)
+    pub fn handle_key(
+        &mut self,
+        key: &keyboard::Key,
+        modifiers: &keyboard::Modifiers,
+        text: Option<&str>,
+    ) -> PickerEvent {
+        match key {
+            keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                PickerEvent::Cancel(self.restore_buffer)
+            }
+            keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                if let Some(item) = self.selected_item() {
+                    PickerEvent::Select(item.action.clone())
+                } else {
+                    PickerEvent::Cancel(self.restore_buffer)
+                }
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                self.move_up();
+                self.preview_event()
+            }
+            keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                self.move_down();
+                self.preview_event()
+            }
+            keyboard::Key::Character(c) if modifiers.control() && c.as_str() == "p" => {
+                self.move_up();
+                self.preview_event()
+            }
+            keyboard::Key::Character(c) if modifiers.control() && c.as_str() == "n" => {
+                self.move_down();
+                self.preview_event()
+            }
+            keyboard::Key::Named(keyboard::key::Named::Backspace) => {
+                self.backspace();
+                self.preview_event()
+            }
+            _ => {
+                // General key presses
+                if let Some(t) = text {
+                    let mut typed = false;
+                    for ch in t.chars() {
+                        if !ch.is_control() {
+                            self.type_char(ch);
+                            typed = true;
+                        }
+                    }
+                    if typed {
+                        self.preview_event()
+                    } else {
+                        PickerEvent::Noop
+                    }
+                } else {
+                    PickerEvent::Noop
+                }
+            }
+        }
+    }
+
+    fn preview_event(&self) -> PickerEvent {
+        let action = self
+            .selected_item()
+            .and_then(|item| item.preview_action.clone());
+        PickerEvent::PreviewChanged(action)
+    }
 }

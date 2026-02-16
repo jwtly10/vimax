@@ -7,7 +7,7 @@ use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::layout::{LayoutNode, SplitDirection};
 use crate::lsp::{LspIncoming, lsp_position_to_offset};
-use crate::picker::{DetailSpan, Picker, PickerItem};
+use crate::picker::{DetailSpan, Picker, PickerEvent, PickerItem};
 use crate::syntax::SyntaxState;
 use crate::syntax::loader::Loader;
 use crate::text_grid;
@@ -186,6 +186,7 @@ impl Remax {
                 modifiers,
                 text,
             } => {
+                // Handle Picker events
                 if self.picker.is_some() {
                     return self.handle_picker_key(&key, &modifiers, text.as_deref());
                 }
@@ -793,7 +794,12 @@ impl Remax {
                     })
                     .collect();
                 self.picker = Some(Picker::new("Buffers", items, restore));
-                self.execute_preview();
+                if let Some(picker) = &self.picker
+                    && let Some(item) = picker.selected_item()
+                    && let Some(action) = item.preview_action.clone()
+                {
+                    self.editor.execute(action);
+                }
             }
             EditorAction::OpenFilePicker {
                 show_ignored,
@@ -841,83 +847,33 @@ impl Remax {
         }
     }
 
-    fn execute_preview(&mut self) {
-        if let Some(picker) = &self.picker
-            && let Some(item) = picker.selected_item()
-            && let Some(action) = item.preview_action.clone()
-        {
-            self.editor.execute(action);
-        }
-    }
-
     fn handle_picker_key(
         &mut self,
         key: &keyboard::Key,
         modifiers: &keyboard::Modifiers,
         text: Option<&str>,
     ) -> Task<Message> {
-        match key {
-            keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                if let Some(picker) = &self.picker {
-                    if let Some(buf_id) = picker.restore_buffer {
-                        let len_chars = self.editor.buffers[buf_id].len_chars();
-                        self.editor.workspace_mut().switch_buffer(buf_id, len_chars);
-                    }
-                }
+        let event = match self.picker.as_mut() {
+            Some(picker) => picker.handle_key(key, modifiers, text),
+            None => return Task::none(),
+        };
+        match event {
+            PickerEvent::Select(action) => {
                 self.picker = None;
-            }
-            keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                if let Some(picker) = &self.picker
-                    && let Some(item) = picker.selected_item()
-                {
-                    let action = item.action.clone();
-                    self.editor.execute(action);
-                }
-                self.picker = None;
+                self.editor.execute(action);
                 self.editor.ensure_cursor_visible();
             }
-            keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                if let Some(picker) = &mut self.picker {
-                    picker.move_up();
+            PickerEvent::Cancel(restore) => {
+                if let Some(buf_id) = restore {
+                    let len_chars = self.editor.buffers[buf_id].len_chars();
+                    self.editor.workspace_mut().switch_buffer(buf_id, len_chars);
                 }
-                self.execute_preview();
+                self.picker = None;
             }
-            keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                if let Some(picker) = &mut self.picker {
-                    picker.move_down();
-                }
-                self.execute_preview();
+            PickerEvent::PreviewChanged(Some(action)) => {
+                self.editor.execute(action);
             }
-            keyboard::Key::Character(c) if modifiers.control() && c.as_str() == "p" => {
-                if let Some(picker) = &mut self.picker {
-                    picker.move_up();
-                }
-                self.execute_preview();
-            }
-            keyboard::Key::Character(c) if modifiers.control() && c.as_str() == "n" => {
-                if let Some(picker) = &mut self.picker {
-                    picker.move_down();
-                }
-                self.execute_preview();
-            }
-            keyboard::Key::Named(keyboard::key::Named::Backspace) => {
-                if let Some(picker) = &mut self.picker {
-                    picker.backspace();
-                }
-                self.execute_preview();
-            }
-            _ => {
-                if let Some(t) = text {
-                    if let Some(picker) = &mut self.picker {
-                        for ch in t.chars() {
-                            if !ch.is_control() {
-                                picker.type_char(ch);
-                            }
-                        }
-                    }
-                    self.execute_preview();
-                }
-            }
+            PickerEvent::PreviewChanged(None) | PickerEvent::Noop => {}
         }
         Task::none()
     }
