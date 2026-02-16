@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use std::time::{Duration, Instant};
+
 use crate::action::{EditorAction, EditorEffect};
 use crate::buffer::Buffer;
 use crate::editor::Editor;
@@ -7,14 +9,14 @@ use crate::layout::{LayoutNode, SplitDirection};
 use crate::lsp::LspIncoming;
 use crate::picker::{Picker, PickerEvent};
 use crate::text_grid;
+use crate::toast::{ToastLevel, ToastManager};
 use crate::vim::VimLayer;
 
 use iced::advanced::subscription::{self, Recipe};
 use iced::futures::SinkExt;
 use iced::futures::stream::BoxStream;
 use iced::keyboard;
-use iced::widget::Space;
-use iced::widget::{column, container, row, text};
+use iced::widget::{Space, column, container, row, stack, text};
 use iced::{Element, Length, Subscription, Task, Theme, event, window};
 use lsp_types::notification::{DidOpenTextDocument, Initialized};
 use lsp_types::{DidOpenTextDocumentParams, InitializedParams};
@@ -27,6 +29,7 @@ pub struct Remax {
     editor: Editor,
     vim: VimLayer,
     picker: Option<Picker>,
+    toast_manager: ToastManager,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +63,8 @@ pub enum Message {
         server_id: usize,
         message: String,
     },
+    ToastTick(Instant),
+    DismissToast(usize),
 }
 
 struct LspSubscription {
@@ -126,6 +131,7 @@ impl Remax {
                 editor,
                 vim: VimLayer::new(),
                 picker: None,
+                toast_manager: ToastManager::new(),
             },
             Task::none(),
         )
@@ -158,6 +164,13 @@ impl Remax {
                     rx: server.rx.clone(),
                 }))
             }
+        }
+
+        if self.toast_manager.has_active_toasts() {
+            subs.push(
+                iced::time::every(Duration::from_millis(16))
+                    .map(|_| Message::ToastTick(Instant::now())),
+            );
         }
 
         Subscription::batch(subs)
@@ -296,6 +309,12 @@ impl Remax {
                     self.editor.ensure_cursor_visible();
                 }
             }
+            Message::ToastTick(now) => {
+                self.toast_manager.tick(now);
+            }
+            Message::DismissToast(id) => {
+                self.toast_manager.dismiss(id);
+            }
             Message::Lsp { server_id, message } => {
                 if let Some(incoming) = self.editor.workspace().lsp_manager.handle_message(&message)
                 {
@@ -332,6 +351,15 @@ impl Remax {
                                                 .is_ok()
                                             {
                                                 server.initialized = true;
+                                                self.toast_manager.push(
+                                                    format!(
+                                                        "{} LSP Ready",
+                                                        server.language.display_name()
+                                                    ),
+                                                    None,
+                                                    ToastLevel::Success,
+                                                    Duration::from_secs(3),
+                                                );
                                                 let server_lang = server.language;
 
                                                 for buf in &self.editor.buffers {
@@ -396,6 +424,17 @@ impl Remax {
                         }
                         LspIncoming::Error { id, error } => {
                             debug!(id, ?error, "got error response");
+                            let error_msg = error
+                                .get("message")
+                                .and_then(|m| m.as_str())
+                                .unwrap_or("Unknown error")
+                                .to_string();
+                            self.toast_manager.push(
+                                "LSP Error",
+                                Some(error_msg),
+                                ToastLevel::Error,
+                                Duration::from_secs(5),
+                            );
                         }
                     }
                 }
@@ -430,23 +469,36 @@ impl Remax {
             .size(14)
             .color(iced::Color::from_rgb(0.6, 0.6, 0.6));
 
-        let modeline = container(
-            row![
-                mode_label,
-                buffer_name,
-                Space::new().width(Length::Fill),
-                position
+        let mut modeline_row = row![mode_label, buffer_name, Space::new().width(Length::Fill),]
+            .align_y(iced::Alignment::Center);
+
+        for (lang_name, initialized) in ws.lsp_manager.server_statuses() {
+            let dot_color = if initialized {
+                iced::Color::from_rgb(0.3, 0.8, 0.3)
+            } else {
+                iced::Color::from_rgb(0.8, 0.7, 0.2)
+            };
+            let indicator = row![
+                text("●").size(10).color(dot_color),
+                text(format!(" {} ", lang_name))
+                    .size(13)
+                    .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
             ]
-            .align_y(iced::Alignment::Center),
-        )
-        .style(|_theme: &Theme| container::Style {
-            background: Some(iced::Background::Color(iced::Color::from_rgb(
-                0.15, 0.15, 0.2,
-            ))),
-            ..Default::default()
-        })
-        .width(Length::Fill)
-        .padding([2, 0]);
+            .align_y(iced::Alignment::Center);
+            modeline_row = modeline_row.push(indicator);
+        }
+
+        modeline_row = modeline_row.push(position);
+
+        let modeline = container(modeline_row)
+            .style(|_theme: &Theme| container::Style {
+                background: Some(iced::Background::Color(iced::Color::from_rgb(
+                    0.15, 0.15, 0.2,
+                ))),
+                ..Default::default()
+            })
+            .width(Length::Fill)
+            .padding([2, 0]);
 
         let bottom_section: Element<'_, Message> = if let Some(picker) = &self.picker {
             picker.view()
@@ -468,7 +520,7 @@ impl Remax {
 
         let content = column![editor_area, modeline, bottom_section];
 
-        container(content)
+        let main_ui = container(content)
             .width(Length::Fill)
             .height(Length::Fill)
             .style(|_theme: &Theme| container::Style {
@@ -476,14 +528,20 @@ impl Remax {
                     0.1, 0.1, 0.12,
                 ))),
                 ..Default::default()
-            })
-            .into()
+            });
+
+        stack![main_ui, self.toast_manager.view()].into()
     }
 
     fn handle_lsp_locations(&mut self, result: serde_json::Value, label: &str) {
         let cwd = self.editor.workspace().cwd.clone();
         let mut locations = crate::picker::sources::parse_lsp_locations(&result);
-        locations.retain(|loc| Path::new(loc.uri.path().as_str()).starts_with(&cwd));
+        // FIXME: Don't match on label
+        // we do this because if we try to reference something like Option<> this returns 1000's
+        // of references which is very slow and not a good UX. It's a rustanalyzer thing, happens in VSCode too
+        if label == "References" {
+            locations.retain(|loc| Path::new(loc.uri.path().as_str()).starts_with(&cwd));
+        }
 
         match locations.len() {
             0 => {
@@ -532,8 +590,11 @@ impl Remax {
         let cwd = self.editor.workspace().cwd.clone();
         match action {
             EditorAction::OpenBufferPicker => {
-                self.picker =
-                    Some(crate::picker::sources::buffer_picker(&self.editor.buffers, &cwd, restore));
+                self.picker = Some(crate::picker::sources::buffer_picker(
+                    &self.editor.buffers,
+                    &cwd,
+                    restore,
+                ));
                 // Preview the first selected buffer
                 if let Some(picker) = &self.picker
                     && let Some(item) = picker.selected_item()
@@ -546,8 +607,12 @@ impl Remax {
                 show_ignored,
                 max_results,
             } => {
-                self.picker =
-                    Some(crate::picker::sources::file_picker(&cwd, show_ignored, max_results, restore));
+                self.picker = Some(crate::picker::sources::file_picker(
+                    &cwd,
+                    show_ignored,
+                    max_results,
+                    restore,
+                ));
             }
             _ => {}
         }

@@ -4,11 +4,11 @@ use std::{collections::HashMap, path::Path, process::Stdio, sync::Arc};
 
 use async_process::{Child, ChildStdin, Command};
 use lsp_types::{
-    notification::Notification, request::Request, ClientCapabilities, ClientInfo, InitializeParams,
-    ServerCapabilities, Uri,
+    ClientCapabilities, ClientInfo, InitializeParams, ServerCapabilities, Uri,
+    notification::Notification, request::Request,
 };
 use smol::{
-    channel::{unbounded, Receiver},
+    channel::{Receiver, unbounded},
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     lock::Mutex,
     spawn,
@@ -25,6 +25,12 @@ impl Language {
     pub fn id(&self) -> &'static str {
         match self {
             Language::Rust => "rust",
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Language::Rust => "Rust", // TBC: Do we want caps?
         }
     }
     // Parse a language from a file path, returning None if the extension is not recognized or missing
@@ -153,6 +159,13 @@ impl LspManager {
             next_request_id: 1,
             pending_requests: HashMap::new(),
         }
+    }
+
+    pub fn server_statuses(&self) -> Vec<(&'static str, bool)> {
+        self.servers
+            .iter()
+            .map(|s| (s.language.display_name(), s.initialized))
+            .collect()
     }
 
     pub fn get_inited_server_for_language(&self, language: Language) -> Option<&LspServer> {

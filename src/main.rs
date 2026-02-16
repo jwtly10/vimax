@@ -10,6 +10,7 @@ mod picker;
 mod registers;
 mod syntax;
 mod text_grid;
+mod toast;
 mod undo;
 
 mod vim;
