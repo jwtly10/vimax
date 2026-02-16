@@ -5,7 +5,7 @@ use crate::action::{EditorAction, Motion, Range};
 use crate::buffer::Buffer;
 
 use super::commands;
-use super::keymap::{CommandId, KeyId, KeyPress, Keymap, KeymapLookup};
+use super::keymap::{Command, KeyId, KeyPress, Keymap, KeymapLookup};
 use super::mode::VimMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -519,10 +519,10 @@ impl InputState {
                     self.pending_keys.clear();
                     self.count_accum = None;
 
-                    if cmd == "op.delete" || cmd == "op.change" || cmd == "op.yank" {
+                    if cmd.is_operator() {
                         self.pending_operator = Some(match cmd {
-                            "op.delete" => Operator::Delete,
-                            "op.change" => Operator::Change,
+                            Command::OpDelete => Operator::Delete,
+                            Command::OpChange => Operator::Change,
                             _ => Operator::Yank,
                         });
                         self.count_accum = Some(count);
@@ -629,29 +629,14 @@ impl InputState {
                     self.pending_keys.clear();
                     self.count_accum = None;
 
-                    if cmd == "op.delete" || cmd == "op.change" || cmd == "op.yank" {
+                    if cmd.is_operator() {
                         self.pending_operator = None;
                         return vec![];
                     }
 
-                    match cmd {
-                        "motion.find_char_forward" => {
-                            self.pending_find_char = Some((true, false));
-                            return vec![];
-                        }
-                        "motion.find_char_backward" => {
-                            self.pending_find_char = Some((false, false));
-                            return vec![];
-                        }
-                        "motion.find_char_forward_before" => {
-                            self.pending_find_char = Some((true, true));
-                            return vec![];
-                        }
-                        "motion.find_char_backward_before" => {
-                            self.pending_find_char = Some((false, true));
-                            return vec![];
-                        }
-                        _ => {}
+                    if let Some((forward, stop_before)) = cmd.find_char_params() {
+                        self.pending_find_char = Some((forward, stop_before));
+                        return vec![];
                     }
 
                     let op = self.pending_operator.take().unwrap();
@@ -680,53 +665,45 @@ impl InputState {
     fn resolve_operator_motion(
         &mut self,
         operator: Operator,
-        motion_cmd: CommandId,
+        motion_cmd: Command,
         count: usize,
         buffer: &Buffer,
         cursor: usize,
     ) -> Vec<EditorAction> {
-        let (motion, inclusive) = match motion_cmd {
-            "cursor.move_left" => (Motion::Left, false),
-            "cursor.move_right" => (Motion::Right, false),
-            "cursor.move_up" => (Motion::Up, false),
-            "cursor.move_down" => (Motion::Down, false),
-            "cursor.move_word_forward" => (Motion::WordForward, false),
-            "cursor.move_word_backward" => (Motion::WordBackward, false),
-            "cursor.move_word_end" => (Motion::WordEnd, true),
-            "cursor.move_line_start" => (Motion::LineStart, false),
-            "cursor.move_line_end" => (Motion::LineEnd, true),
-            "cursor.move_first_non_whitespace" => (Motion::FirstNonWhitespace, false),
-            "cursor.move_to_start" => (Motion::FileStart, false),
-            "cursor.move_to_end" => (Motion::FileEnd, false),
-            "motion.repeat_find_char" => {
-                if let Some((ch, forward, stop_before)) = self.last_find_char {
-                    (
-                        Motion::FindChar {
-                            ch,
-                            forward,
-                            stop_before,
-                        },
-                        true,
-                    )
-                } else {
-                    return vec![];
+        let (motion, inclusive) = if let Some(pair) = motion_cmd.as_motion() {
+            pair
+        } else {
+            match motion_cmd {
+                Command::MotionRepeatFindChar => {
+                    if let Some((ch, forward, stop_before)) = self.last_find_char {
+                        (
+                            Motion::FindChar {
+                                ch,
+                                forward,
+                                stop_before,
+                            },
+                            true,
+                        )
+                    } else {
+                        return vec![];
+                    }
                 }
-            }
-            "motion.repeat_find_char_reverse" => {
-                if let Some((ch, forward, stop_before)) = self.last_find_char {
-                    (
-                        Motion::FindChar {
-                            ch,
-                            forward: !forward,
-                            stop_before,
-                        },
-                        true,
-                    )
-                } else {
-                    return vec![];
+                Command::MotionRepeatFindCharReverse => {
+                    if let Some((ch, forward, stop_before)) = self.last_find_char {
+                        (
+                            Motion::FindChar {
+                                ch,
+                                forward: !forward,
+                                stop_before,
+                            },
+                            true,
+                        )
+                    } else {
+                        return vec![];
+                    }
                 }
+                _ => return vec![],
             }
-            _ => return vec![],
         };
 
         let after = buffer.cursor_after_motion(cursor, &motion, count);
