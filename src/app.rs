@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 
@@ -726,7 +727,7 @@ impl Remax {
                                     file_cache.entry(path_str.clone()).or_insert_with(|| {
                                         load_file_for_preview(&path, &self.editor.loader)
                                     });
-                                if let Some((rope, syntax)) = cached {
+                                if let Some((rope, syntax)) = cached.as_ref() {
                                     highlighted_line(
                                         rope,
                                         syntax.as_ref(),

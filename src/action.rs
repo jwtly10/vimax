@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use iced::Task;
 
 use crate::app::Message;
