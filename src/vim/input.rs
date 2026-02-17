@@ -252,11 +252,19 @@ impl InputState {
         ]
     }
 
+    /// Exits insert mode. Returns actions to finalize the edit group and update the status line.
+    ///
+    /// NB: This motions move 'back' a char here to replicate ergonomics of Vim
+    /// where the 'insert' cursor is between two chars
     pub fn exit_insert(&mut self) -> Vec<EditorAction> {
         info!("exiting insert mode");
         self.mode = VimMode::Normal;
         vec![
             EditorAction::FinishEditGroup,
+            EditorAction::MoveCursor {
+                motion: Motion::Left,
+                count: 1,
+            },
             EditorAction::SetMode("NORMAL".to_string()),
         ]
     }

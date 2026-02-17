@@ -612,6 +612,7 @@ impl Buffer {
         cursor
     }
 
+    /// We define an 'inner word' as a series of alphanumeric, or '_' chars
     pub fn text_object_inner_word(&self, cursor: usize) -> (usize, usize) {
         let len = self.rope.len_chars();
         if len == 0 {
@@ -619,7 +620,7 @@ impl Buffer {
         }
         let pos = cursor.min(len.saturating_sub(1));
         let ch = self.rope.char(pos);
-        let is_word_char = |c: char| !c.is_whitespace();
+        let is_word_char = |c: char| !c.is_whitespace() && (c.is_alphanumeric() || c == '_');
         let classifier: fn(char) -> bool = if is_word_char(ch) {
             is_word_char
         } else {

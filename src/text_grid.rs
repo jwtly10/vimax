@@ -1,6 +1,7 @@
 use crate::buffer::Buffer;
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::syntax::highlight::HighlightSpan;
+use crate::vim::mode::VimMode;
 use iced::advanced::layout;
 use iced::advanced::renderer::{self, Renderer as _};
 use iced::advanced::text::{self as iced_text, Renderer as _};
@@ -28,6 +29,7 @@ pub struct TextGrid<'a> {
     is_active: bool,
     highlights: Vec<HighlightSpan>,
     diagnostics: &'a [Diagnostic],
+    vim_mode: VimMode,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -43,6 +45,7 @@ pub fn text_grid<'a>(
     is_active: bool,
     highlights: Vec<HighlightSpan>,
     diagnostics: &'a [Diagnostic],
+    vim_mode: VimMode,
 ) -> Element<'a, crate::app::Message> {
     Element::new(TextGrid {
         buffer,
@@ -56,6 +59,7 @@ pub fn text_grid<'a>(
         is_active,
         highlights,
         diagnostics,
+        vim_mode,
     })
 }
 
@@ -458,12 +462,15 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                     let cursor_x = text_x + ((cursor_col - scroll_x) as f32 * CHAR_WIDTH);
 
                     if cursor_x < bounds.x + bounds.width {
+                        let is_bar = self.vim_mode == VimMode::Insert;
+                        let cursor_width = if is_bar { 2.0 } else { CHAR_WIDTH };
+
                         renderer.fill_quad(
                             renderer::Quad {
                                 bounds: Rectangle {
                                     x: cursor_x,
                                     y,
-                                    width: CHAR_WIDTH,
+                                    width: cursor_width,
                                     height: LINE_HEIGHT,
                                 },
                                 border: iced::border::rounded(1),
@@ -472,29 +479,31 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                             Color::from_rgba(0.8, 0.8, 0.3, 0.7),
                         );
 
-                        let char_count = display_str.chars().count();
-                        let cursor_char: String = if cursor_col < char_count {
-                            display_str.chars().nth(cursor_col).unwrap().to_string()
-                        } else {
-                            " ".to_string()
-                        };
+                        if !is_bar {
+                            let char_count = display_str.chars().count();
+                            let cursor_char: String = if cursor_col < char_count {
+                                display_str.chars().nth(cursor_col).unwrap().to_string()
+                            } else {
+                                " ".to_string()
+                            };
 
-                        renderer.fill_text(
-                            iced_text::Text {
-                                content: cursor_char,
-                                bounds: Size::new(CHAR_WIDTH, LINE_HEIGHT),
-                                size: FONT_SIZE.into(),
-                                line_height: iced_text::LineHeight::Absolute(LINE_HEIGHT.into()),
-                                font: iced::Font::MONOSPACE,
-                                align_x: iced::Alignment::Start.into(),
-                                align_y: alignment::Vertical::Top,
-                                shaping: iced_text::Shaping::Basic,
-                                wrapping: iced_text::Wrapping::None,
-                            },
-                            iced::Point::new(cursor_x, y),
-                            Color::from_rgb(0.1, 0.1, 0.1),
-                            *viewport,
-                        );
+                            renderer.fill_text(
+                                iced_text::Text {
+                                    content: cursor_char,
+                                    bounds: Size::new(CHAR_WIDTH, LINE_HEIGHT),
+                                    size: FONT_SIZE.into(),
+                                    line_height: iced_text::LineHeight::Absolute(LINE_HEIGHT.into()),
+                                    font: iced::Font::MONOSPACE,
+                                    align_x: iced::Alignment::Start.into(),
+                                    align_y: alignment::Vertical::Top,
+                                    shaping: iced_text::Shaping::Basic,
+                                    wrapping: iced_text::Wrapping::None,
+                                },
+                                iced::Point::new(cursor_x, y),
+                                Color::from_rgb(0.1, 0.1, 0.1),
+                                *viewport,
+                            );
+                        }
                     }
                 }
             }

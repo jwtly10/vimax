@@ -1027,6 +1027,7 @@ impl Remax {
                     is_active,
                     highlights,
                     visible_diags,
+                    self.vim.mode(),
                 );
 
                 let markers = self.build_scrollbar_markers(win, buffer);
