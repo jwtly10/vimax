@@ -1,7 +1,9 @@
 use crate::action::{EditorAction, Motion, Range};
 use crate::app::Message;
 use crate::buffer::Buffer;
+use crate::diagnostics::{Diagnostic, Severity};
 use crate::text_grid;
+use crate::ui::hover::extract_hover_text;
 use crate::vim::mode::VimMode;
 use crate::vim::VimLayer;
 use crate::window::Window;
@@ -328,8 +330,107 @@ impl FloatingPanel {
         }
     }
 
+    /// Build a panel from an LSP hover response. Returns None if the result is null.
+    pub fn from_hover_response(
+        result: &serde_json::Value,
+        position: PanelPosition,
+    ) -> Option<Self> {
+        if result.is_null() {
+            return None;
+        }
+        let lines = extract_hover_text(result);
+        let content = lines.join("\n");
+        Some(Self::new(&content, "Hover", PanelKind::LspHover, position))
+    }
+
+    /// Build a panel from diagnostics on a given line.
+    pub fn from_diagnostics(diags: &[&Diagnostic], position: PanelPosition) -> Option<Self> {
+        if diags.is_empty() {
+            return None;
+        }
+        let mut text_lines = Vec::new();
+        for d in diags {
+            let icon = match d.severity {
+                Severity::Error => "E",
+                Severity::Warning => "W",
+                Severity::Info => "I",
+                Severity::Hint => "H",
+            };
+            for (i, msg_line) in d.message.lines().enumerate() {
+                if i == 0 {
+                    text_lines.push(format!("[{}] {}", icon, msg_line));
+                } else {
+                    text_lines.push(format!("    {}", msg_line));
+                }
+            }
+            if let Some(src) = &d.source {
+                text_lines.push(format!("    [{}]", src));
+            }
+        }
+        let content = text_lines.join("\n");
+        Some(Self::new(
+            &content,
+            "Diagnostics",
+            PanelKind::Diagnostic,
+            position,
+        ))
+    }
+
     pub fn focus(&mut self) {
         self.focused = true;
+    }
+
+    /// Returns true if the given editor action is the trigger that opened this panel kind.
+    pub fn is_retrigger(&self, action: &EditorAction) -> bool {
+        matches!(
+            (action, self.kind),
+            (EditorAction::LspHover, PanelKind::LspHover)
+                | (EditorAction::ShowDiagnosticUnderCursor, PanelKind::Diagnostic)
+        )
+    }
+
+    // --- Message handlers for routed events (PANEL_WINDOW_ID) ---------------
+
+    pub fn handle_scroll_lines(&mut self, delta: f32, speed: f32) {
+        let total = self.panel_buffer.buffer.total_lines();
+        self.panel_buffer.window.scroll_lines(delta, speed, total);
+    }
+
+    pub fn handle_scroll_cols(&mut self, delta: f32, speed: f32) {
+        let max_len = self.panel_buffer.buffer.max_line_len();
+        self.panel_buffer.window.scroll_cols(delta, speed, max_len);
+    }
+
+    pub fn handle_scrollbar_jump(&mut self, line: usize) {
+        let new_cursor = self.panel_buffer.buffer.cursor_from_position(line, 0);
+        self.panel_buffer.window.cursor = new_cursor;
+        self.panel_buffer
+            .window
+            .ensure_cursor_visible(&self.panel_buffer.buffer);
+    }
+
+    pub fn handle_scrollbar_drag(&mut self, scroll_y: usize) {
+        let total = self.panel_buffer.buffer.total_lines();
+        let max_scroll = total.saturating_sub(1);
+        self.panel_buffer.window.scroll_y = scroll_y.min(max_scroll);
+    }
+
+    pub fn handle_mouse_click(&mut self, x: f32, y: f32) {
+        let win = &self.panel_buffer.window;
+        let line = win.scroll_y + (y / text_grid::LINE_HEIGHT) as usize;
+        let col =
+            win.scroll_x + ((x - text_grid::GUTTER_WIDTH - 8.0).max(0.0) / text_grid::CHAR_WIDTH) as usize;
+        let new_cursor = self.panel_buffer.buffer.cursor_from_position(line, col);
+        self.panel_buffer.window.cursor = new_cursor;
+        self.panel_buffer
+            .window
+            .ensure_cursor_visible(&self.panel_buffer.buffer);
+        self.focused = true;
+    }
+
+    pub fn handle_viewport_resized(&mut self, lines: usize, cols: usize) {
+        self.panel_buffer.window.visible_lines = lines;
+        self.panel_buffer.window.visible_cols = cols;
     }
 
     pub fn view(
