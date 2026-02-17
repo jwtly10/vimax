@@ -231,15 +231,6 @@ impl Remax {
                     }
                 }
 
-                debug!(
-                    mode = %self.vim.mode(),
-                    ?key,
-                    ?modified_key,
-                    ?modifiers,
-                    ?text,
-                    "editor key event"
-                );
-
                 let actions = {
                     let buffer = self.editor.buffer();
                     let cursor = self.editor.cursor();
@@ -512,17 +503,23 @@ impl Remax {
                         }
                         LspIncoming::Error { id, error } => {
                             debug!(id, ?error, "got error response");
-                            let error_msg = error
-                                .get("message")
-                                .and_then(|m| m.as_str())
-                                .unwrap_or("Unknown error")
-                                .to_string();
-                            self.toast_manager.push(
-                                "LSP Error",
-                                Some(error_msg),
-                                ToastLevel::Error,
-                                Duration::from_secs(5),
-                            );
+                            let error_code = error.get("code").and_then(|c| c.as_i64());
+                            if error_code == Some(-32801) {
+                                // "content modified" — annoying error with rust analyzer
+                                self.editor.status_message = "LSP busy, try again".to_string();
+                            } else {
+                                let error_msg = error
+                                    .get("message")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("Unknown error")
+                                    .to_string();
+                                self.toast_manager.push(
+                                    "LSP Error",
+                                    Some(error_msg),
+                                    ToastLevel::Error,
+                                    Duration::from_secs(5),
+                                );
+                            }
                         }
                     }
                 }

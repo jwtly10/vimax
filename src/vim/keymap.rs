@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use iced::keyboard;
-use tracing::debug;
+use tracing::trace;
 
 use crate::action::Motion;
 
@@ -268,15 +268,15 @@ impl Keymap {
     }
 
     pub fn lookup(&self, keys: &[KeyPress]) -> KeymapLookup {
-        debug!(?keys, "key command lookup");
+        trace!(?keys, "key command lookup");
         if let Some(&cmd) = self.bindings.get(keys) {
-            debug!(?cmd, "key command found");
+            trace!(?cmd, "key command found");
             KeymapLookup::Match(cmd)
         } else if self.prefixes.contains_key(keys) {
-            debug!("starting key sequence, waiting for more input");
+            trace!("starting key sequence, waiting for more input");
             KeymapLookup::Pending
         } else {
-            debug!("no matching key sequence");
+            trace!("no matching key sequence");
             KeymapLookup::NoMatch
         }
     }
