@@ -25,7 +25,7 @@ use lsp_types::{DidOpenTextDocumentParams, InitializedParams};
 use smol::channel::Receiver;
 use tracing::{debug, info};
 
-const SCROLL_SPEED: f32 = 0.5;
+const SCROLL_SPEED: f32 = 0.8;
 
 pub struct Remax {
     editor: Editor,
@@ -296,7 +296,10 @@ impl Remax {
                     self.editor.ensure_cursor_visible();
                 }
             }
-            Message::ScrollbarDrag { scroll_y, window_id } => {
+            Message::ScrollbarDrag {
+                scroll_y,
+                window_id,
+            } => {
                 let ws = self.editor.workspace_mut();
                 if window_id < ws.windows.len() {
                     let buf_id = ws.windows[window_id].buffer_id;
@@ -753,11 +756,7 @@ impl Remax {
                     is_active,
                 );
 
-                row![
-                    container(grid).width(Length::Fill).height(Length::Fill),
-                    sb,
-                ]
-                .into()
+                row![container(grid).width(Length::Fill).height(Length::Fill), sb,].into()
             }
             LayoutNode::Split {
                 direction,
