@@ -207,7 +207,6 @@ impl Remax {
                 if self.picker.is_some() {
                     return self.handle_picker_key(&key, &modifiers, text.as_deref());
                 }
-
                 debug!(
                     mode = %self.vim.mode(),
                     ?key,
@@ -232,7 +231,9 @@ impl Remax {
 
                 for action in actions {
                     match action {
-                        EditorAction::OpenBufferPicker | EditorAction::OpenFilePicker { .. } => {
+                        EditorAction::OpenBufferPicker
+                        | EditorAction::OpenFilePicker { .. }
+                        | EditorAction::OpenDiagnosticsPicker => {
                             self.open_picker(action);
                             return Task::none();
                         }
@@ -684,6 +685,14 @@ impl Remax {
                     &cwd,
                     show_ignored,
                     max_results,
+                    restore,
+                ));
+            }
+            EditorAction::OpenDiagnosticsPicker => {
+                self.picker = Some(crate::picker::sources::diagnostics_picker(
+                    &self.editor.buffers,
+                    &self.editor.diagnostics,
+                    &cwd,
                     restore,
                 ));
             }

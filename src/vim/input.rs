@@ -1035,6 +1035,7 @@ impl InputState {
             "bp" | "bprev" | "bprevious" => vec![EditorAction::PrevBuffer],
             "bd" | "bdelete" => vec![EditorAction::CloseBuffer],
             "buffers" | "ls" => vec![EditorAction::OpenBufferPicker],
+            "diagnostics" => vec![EditorAction::OpenDiagnosticsPicker],
             "vs" | "vsplit" => vec![EditorAction::VSplit],
             "sp" | "split" => vec![EditorAction::HSplit],
             "close" => vec![EditorAction::CloseWindow],

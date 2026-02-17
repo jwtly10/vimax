@@ -610,7 +610,9 @@ impl Editor {
             EditorAction::JumpForward => {
                 self.jump_forward();
             }
-            EditorAction::OpenBufferPicker | EditorAction::OpenFilePicker { .. } => {}
+            EditorAction::OpenBufferPicker
+            | EditorAction::OpenFilePicker { .. }
+            | EditorAction::OpenDiagnosticsPicker => {}
             EditorAction::SwitchToBuffer(buf_id) => {
                 if buf_id < self.buffers.len() {
                     let len_chars = self.buffers[buf_id].len_chars();

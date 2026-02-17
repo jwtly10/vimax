@@ -115,6 +115,9 @@ pub enum Command {
     // Jump list
     JumpBackward,
     JumpForward,
+
+    // Diagnostics
+    PickerDiagnostics,
 }
 
 impl Command {
@@ -446,6 +449,7 @@ fn all_bindings() -> Vec<AnnotatedBinding> {
         NormalOnly => [LEADER_KEY, KeyPress::char('b'), KeyPress::char('b')] => Command::PickerBuffers,
         NormalOnly => [LEADER_KEY, KeyPress::char('p'), KeyPress::char('f')] => Command::PickerProjectFiles,
         NormalOnly => [LEADER_KEY, KeyPress::char('p'), KeyPress::char('g')] => Command::PickerProjectFilesShowIgnored,
+        NormalOnly => [LEADER_KEY, KeyPress::char('x'), KeyPress::char('x')] => Command::PickerDiagnostics,
         NormalOnly => [KeyPress::char('D')]                 => Command::EditDeleteTillEol,
         NormalOnly => [KeyPress::char('x')]                 => Command::EditDeleteCharForward,
         NormalOnly => [KeyPress::char('u')]                 => Command::EditUndo,

@@ -115,6 +115,7 @@ pub enum EditorAction {
     LspDeclaration,
     JumpBackward,
     JumpForward,
+    OpenDiagnosticsPicker,
 }
 
 pub enum EditorEffect {

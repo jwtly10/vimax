@@ -195,5 +195,7 @@ pub fn resolve(
         Command::SystemCopy => vec![EditorAction::SystemCopy],
         Command::SystemCut => vec![EditorAction::SystemCut],
         Command::SystemPaste => vec![EditorAction::SystemPaste],
+
+        Command::PickerDiagnostics => vec![EditorAction::OpenDiagnosticsPicker],
     }
 }

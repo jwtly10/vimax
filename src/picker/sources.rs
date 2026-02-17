@@ -6,6 +6,7 @@ use ropey::Rope;
 
 use crate::action::EditorAction;
 use crate::buffer::Buffer;
+use crate::diagnostics::{DiagnosticStore, Severity};
 use crate::picker::{DetailSpan, Picker, PickerItem};
 use crate::syntax::SyntaxState;
 use crate::syntax::loader::Loader;
@@ -319,4 +320,90 @@ fn rope_byte_slice(rope: &Rope, start: usize, end: usize) -> String {
     let char_start = rope.byte_to_char(start);
     let char_end = rope.byte_to_char(end.min(rope.len_bytes()));
     rope.slice(char_start..char_end).chars().collect()
+}
+
+/// Build a picker showing all diagnostics across all buffers.
+pub fn diagnostics_picker(
+    buffers: &[Buffer],
+    diagnostics: &DiagnosticStore,
+    cwd: &Path,
+    restore_buffer: Option<usize>,
+) -> Picker {
+    let mut items = Vec::new();
+
+    for (buf_id, buf) in buffers.iter().enumerate() {
+        let diags = diagnostics.get_for_buffer(buf_id);
+        if diags.is_empty() {
+            continue;
+        }
+
+        let file_path = buf.file_path().unwrap_or(buf.name());
+        let display_path = Path::new(file_path)
+            .strip_prefix(cwd)
+            .unwrap_or(Path::new(file_path))
+            .display()
+            .to_string();
+
+        for diag in diags {
+            let severity_label = match diag.severity {
+                Severity::Error => "E",
+                Severity::Warning => "W",
+                Severity::Info => "I",
+                Severity::Hint => "H",
+            };
+
+            let severity_color = match diag.severity {
+                Severity::Error => iced::Color::from_rgb(1.0, 0.3, 0.3),
+                Severity::Warning => iced::Color::from_rgb(1.0, 0.8, 0.2),
+                Severity::Info => iced::Color::from_rgb(0.3, 0.7, 1.0),
+                Severity::Hint => iced::Color::from_rgb(0.5, 0.8, 0.5),
+            };
+
+            let source_prefix = diag
+                .source
+                .as_deref()
+                .map(|s| format!("[{}] ", s))
+                .unwrap_or_default();
+
+            let location = format!("{}:{}:{}", display_path, diag.line + 1, diag.col_start + 1,);
+
+            let match_text = format!("{} {} {}", location, severity_label, diag.message);
+
+            let detail_spans = vec![
+                DetailSpan {
+                    text: format!(" {} ", severity_label),
+                    color: severity_color,
+                },
+                DetailSpan {
+                    text: format!(" {} ", location),
+                    color: iced::Color::from_rgb(0.5, 0.55, 0.65),
+                },
+                DetailSpan {
+                    text: format!("{}{}", source_prefix, diag.message),
+                    color: iced::Color::from_rgb(0.75, 0.75, 0.8),
+                },
+            ];
+
+            let path = buf
+                .file_path()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(buf.name()));
+
+            items.push(PickerItem {
+                match_text,
+                display: String::new(),
+                detail: None,
+                detail_spans,
+                group: Some(display_path.clone()),
+                action: EditorAction::OpenFileAtPosition {
+                    path: path.clone(),
+                    line: diag.line,
+                    col: diag.col_start,
+                },
+                preview_action: None,
+            });
+        }
+    }
+
+    Picker::new("Diagnostics", items, restore_buffer)
 }
