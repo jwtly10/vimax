@@ -3,6 +3,7 @@ mod macros;
 mod action;
 mod app;
 mod buffer;
+mod completions;
 mod diagnostics;
 mod editor;
 mod layout;

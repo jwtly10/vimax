@@ -610,6 +610,16 @@ impl Editor {
             EditorAction::JumpForward => {
                 self.jump_forward();
             }
+            EditorAction::LspApplyCompletion {
+                delete_backward,
+                insert_text,
+            } => {
+                let (win, buf, _) = current_mut!(self);
+                for _ in 0..delete_backward {
+                    win.cursor = buf.delete_char_backward(win.cursor);
+                }
+                win.cursor = buf.insert_str(win.cursor, &insert_text);
+            }
             EditorAction::OpenBufferPicker
             | EditorAction::OpenFilePicker { .. }
             | EditorAction::OpenDiagnosticsPicker => {}

@@ -4,13 +4,14 @@ use lsp_types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument,
 };
 use lsp_types::request::{
-    GotoDeclaration, GotoDefinition, GotoImplementation, References, Request,
+    Completion, GotoDeclaration, GotoDefinition, GotoImplementation, References, Request,
 };
 use lsp_types::{
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DidSaveTextDocumentParams, GotoDefinitionParams, ReferenceContext, ReferenceParams,
-    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
-    TextDocumentPositionParams, VersionedTextDocumentIdentifier,
+    CompletionContext, CompletionParams, CompletionTriggerKind, DidChangeTextDocumentParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+    GotoDefinitionParams, ReferenceContext, ReferenceParams, TextDocumentContentChangeEvent,
+    TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams,
+    VersionedTextDocumentIdentifier,
 };
 
 use super::{LspManager, offset_to_lsp_position, path_to_uri};
@@ -27,6 +28,25 @@ impl LspManager {
 
     pub fn goto_declaration(&mut self, buf: &Buffer, cursor: usize) -> Option<i64> {
         self.send_position_request::<GotoDeclaration>(buf, cursor)
+    }
+
+    pub fn request_completions(&mut self, buf: &Buffer, cursor: usize) -> Option<i64> {
+        let (server_id, uri, position) = self.resolve_position(buf, cursor)?;
+        self.send_request::<Completion>(
+            server_id,
+            CompletionParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri },
+                    position,
+                },
+                context: Some(CompletionContext {
+                    trigger_kind: CompletionTriggerKind::INVOKED,
+                    trigger_character: None,
+                }),
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            },
+        )
     }
 
     pub fn find_references(&mut self, buf: &Buffer, cursor: usize) -> Option<i64> {

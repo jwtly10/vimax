@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use crate::action::{EditorAction, EditorEffect};
 use crate::buffer::Buffer;
+use crate::completions::{CompletionEvent, CompletionState};
 use crate::editor::Editor;
 use crate::layout::{LayoutNode, SplitDirection};
 use crate::lsp::LspIncoming;
@@ -13,6 +14,7 @@ use crate::ui;
 use crate::ui::scrollbar::ScrollbarMarker;
 use crate::ui::toast::{ToastLevel, ToastManager};
 use crate::vim::VimLayer;
+use crate::vim::mode::VimMode;
 
 use iced::advanced::subscription::{self, Recipe};
 use iced::futures::SinkExt;
@@ -26,12 +28,15 @@ use smol::channel::Receiver;
 use tracing::{debug, info};
 
 const SCROLL_SPEED: f32 = 0.8;
+const COMPLETION_DEBOUNCE_MS: u64 = 150;
 
 pub struct Remax {
     editor: Editor,
     vim: VimLayer,
     picker: Option<Picker>,
     toast_manager: ToastManager,
+    completions: Option<CompletionState>,
+    completion_debounce: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +80,7 @@ pub enum Message {
     },
     ToastTick(Instant),
     DismissToast(usize),
+    CompletionTick(Instant),
 }
 
 struct LspSubscription {
@@ -142,6 +148,8 @@ impl Remax {
                 vim: VimLayer::new(),
                 picker: None,
                 toast_manager: ToastManager::new(),
+                completions: None,
+                completion_debounce: None,
             },
             Task::none(),
         )
@@ -183,6 +191,13 @@ impl Remax {
             );
         }
 
+        if self.completion_debounce.is_some() {
+            subs.push(
+                iced::time::every(Duration::from_millis(16))
+                    .map(|_| Message::CompletionTick(Instant::now())),
+            );
+        }
+
         Subscription::batch(subs)
     }
 
@@ -204,16 +219,25 @@ impl Remax {
                 modifiers,
                 text,
             } => {
+                // Some elements require hijacking keystrokes
                 if self.picker.is_some() {
                     return self.handle_picker_key(&key, &modifiers, text.as_deref());
                 }
+
+                if self.completions.is_some() {
+                    let intercept = Self::is_completion_key(&key, &modifiers);
+                    if intercept {
+                        return self.handle_completion_key(&key, &modifiers);
+                    }
+                }
+
                 debug!(
                     mode = %self.vim.mode(),
                     ?key,
                     ?modified_key,
                     ?modifiers,
                     ?text,
-                    "key event"
+                    "editor key event"
                 );
 
                 let actions = {
@@ -229,15 +253,16 @@ impl Remax {
                     )
                 };
 
-                for action in actions {
+                for action in &actions {
                     match action {
                         EditorAction::OpenBufferPicker
                         | EditorAction::OpenFilePicker { .. }
                         | EditorAction::OpenDiagnosticsPicker => {
-                            self.open_picker(action);
+                            self.completions = None;
+                            self.open_picker(action.clone());
                             return Task::none();
                         }
-                        action => match self.editor.execute(action) {
+                        action => match self.editor.execute(action.clone()) {
                             EditorEffect::Task(t) => {
                                 self.editor.update_search_cache();
                                 self.editor.ensure_cursor_visible();
@@ -247,6 +272,9 @@ impl Remax {
                         },
                     }
                 }
+
+                self.finalize_completions(&actions);
+
                 self.editor.update_search_cache();
                 self.editor.ensure_cursor_visible();
                 self.editor.ensure_syntax_current();
@@ -344,6 +372,15 @@ impl Remax {
                 }
                 if resized {
                     self.editor.ensure_cursor_visible();
+                }
+            }
+            Message::CompletionTick(now) => {
+                if let Some(debounce_start) = self.completion_debounce
+                    && now.duration_since(debounce_start).as_millis()
+                        >= COMPLETION_DEBOUNCE_MS as u128
+                {
+                    self.completion_debounce = None;
+                    self.fire_completion_request();
                 }
             }
             Message::ToastTick(now) => {
@@ -446,6 +483,10 @@ impl Remax {
                                     "textDocument/declaration" => {
                                         debug!(?result, "declaration response");
                                         self.handle_lsp_locations(result, "Declaration");
+                                    }
+                                    "textDocument/completion" => {
+                                        debug!("completion response received");
+                                        self.handle_completion_response(result);
                                     }
                                     _ => {
                                         debug!(method = %pending.method, "response matched pending request");
@@ -604,7 +645,187 @@ impl Remax {
                 ..Default::default()
             });
 
-        stack![main_ui, self.toast_manager.view()].into()
+        let mut layers = stack![main_ui];
+
+        if let Some(comp) = &self.completions {
+            let active_win = ws.window();
+            let active_buf = self.editor.buffer();
+            let (cursor_line, cursor_col) = active_buf.cursor_position(active_win.cursor);
+
+            let pixel_x = text_grid::GUTTER_WIDTH
+                + 8.0
+                + (cursor_col as isize - active_win.scroll_x as isize).max(0) as f32
+                    * text_grid::CHAR_WIDTH;
+            let pixel_y = ((cursor_line as isize - active_win.scroll_y as isize + 1).max(0) as f32)
+                * text_grid::LINE_HEIGHT;
+
+            let popup_height = comp.visible_count() as f32 * text_grid::LINE_HEIGHT;
+            let viewport_height = active_win.visible_lines as f32 * text_grid::LINE_HEIGHT;
+
+            // Flip above cursor if near bottom
+            let final_y = if pixel_y + popup_height > viewport_height {
+                ((cursor_line as isize - active_win.scroll_y as isize) as f32
+                    * text_grid::LINE_HEIGHT
+                    - popup_height)
+                    .max(0.0)
+            } else {
+                pixel_y
+            };
+
+            let overlay = container(column![
+                Space::new().height(Length::Fixed(final_y)),
+                row![Space::new().width(Length::Fixed(pixel_x)), comp.view()]
+            ])
+            .width(Length::Fill)
+            .height(Length::Fill);
+
+            layers = layers.push(overlay);
+        }
+
+        layers = layers.push(self.toast_manager.view());
+        layers.into()
+    }
+
+    fn is_completion_key(key: &keyboard::Key, modifiers: &keyboard::Modifiers) -> bool {
+        use iced::keyboard::Key;
+        use iced::keyboard::key::Named;
+        match key {
+            Key::Named(Named::Escape)
+            | Key::Named(Named::Enter)
+            | Key::Named(Named::Tab)
+            | Key::Named(Named::ArrowDown)
+            | Key::Named(Named::ArrowUp) => true,
+            Key::Character(ch) if modifiers.control() => {
+                matches!(ch.as_str(), "n" | "p")
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_completion_key(
+        &mut self,
+        key: &keyboard::Key,
+        modifiers: &keyboard::Modifiers,
+    ) -> Task<Message> {
+        let event = if let Some(comp) = self.completions.as_mut() {
+            comp.handle_key(key, modifiers)
+        } else {
+            return Task::none();
+        };
+        match event {
+            CompletionEvent::Accept {
+                insert_text,
+                prefix_len,
+            } => {
+                self.completions = None;
+                self.completion_debounce = None;
+                self.editor.execute(EditorAction::LspApplyCompletion {
+                    delete_backward: prefix_len,
+                    insert_text,
+                });
+                self.editor.ensure_cursor_visible();
+                self.editor.ensure_syntax_current();
+            }
+            CompletionEvent::Dismiss => {
+                self.completions = None;
+                self.completion_debounce = None;
+            }
+            CompletionEvent::Noop => {}
+        }
+        Task::none()
+    }
+
+    fn finalize_completions(&mut self, actions: &[EditorAction]) {
+        if self.vim.mode() != VimMode::Insert {
+            self.completions = None;
+            self.completion_debounce = None;
+            return;
+        }
+
+        for action in actions {
+            match action {
+                EditorAction::InsertChar(ch) => {
+                    if let Some(comp) = self.completions.as_mut() {
+                        comp.push_char(*ch);
+                        if comp.is_empty() {
+                            self.completions = None;
+                        }
+                    } else if self.should_trigger_completion(*ch) {
+                        self.completion_debounce = Some(Instant::now());
+                    }
+                }
+                EditorAction::DeleteCharBackward => {
+                    if let Some(comp) = self.completions.as_mut()
+                        && (!comp.pop_char() || comp.prefix_len() == 0 || comp.is_empty())
+                    {
+                        self.completions = None;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn should_trigger_completion(&self, ch: char) -> bool {
+        if ch.is_alphanumeric() || ch == '_' {
+            return true;
+        }
+        if let Some(server) = self
+            .editor
+            .workspace()
+            .lsp_manager
+            .servers
+            .iter()
+            .find(|s| s.initialized)
+            && let Some(caps) = &server.capabilities
+            && let Some(provider) = &caps.completion_provider
+            && let Some(triggers) = &provider.trigger_characters
+        {
+            let ch_str = ch.to_string();
+            return triggers.contains(&ch_str);
+        }
+        false
+    }
+
+    fn fire_completion_request(&mut self) {
+        let ws_idx = self.editor.active_workspace;
+        let win = self.editor.workspaces[ws_idx].window();
+        let cursor = win.cursor;
+        let buf_id = win.buffer_id;
+        let buf = &self.editor.buffers[buf_id];
+        self.editor.workspaces[ws_idx]
+            .lsp_manager
+            .request_completions(buf, cursor);
+    }
+
+    fn handle_completion_response(&mut self, result: serde_json::Value) {
+        // Only show completions if we're still in insert mode
+        if self.vim.mode() != VimMode::Insert {
+            return;
+        }
+
+        let cursor = self.editor.cursor();
+        let buf = self.editor.buffer();
+
+        // Compute prefix: text from last non-identifier char to cursor
+        let rope = buf.rope();
+        let line = rope.char_to_line(cursor);
+        let line_start = rope.line_to_char(line);
+        let line_text: String = rope.slice(line_start..cursor).chars().collect();
+
+        let prefix_start = line_text
+            .rfind(|c: char| !c.is_alphanumeric() && c != '_')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let prefix = &line_text[prefix_start..];
+        let trigger_offset = line_start + prefix_start;
+
+        if let Some(state) = crate::completions::parse_lsp_response(&result, trigger_offset, prefix)
+        {
+            self.completions = Some(state);
+        } else {
+            self.completions = None;
+        }
     }
 
     fn handle_lsp_locations(&mut self, result: serde_json::Value, label: &str) {

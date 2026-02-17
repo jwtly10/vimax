@@ -116,6 +116,10 @@ pub enum EditorAction {
     JumpBackward,
     JumpForward,
     OpenDiagnosticsPicker,
+    LspApplyCompletion {
+        delete_backward: usize,
+        insert_text: String,
+    },
 }
 
 pub enum EditorEffect {
