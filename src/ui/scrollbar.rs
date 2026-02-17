@@ -5,7 +5,7 @@ use iced::advanced::{Clipboard, Shell};
 use iced::mouse;
 use iced::{Color, Element, Event, Length, Rectangle, Size};
 
-const SCROLLBAR_WIDTH: f32 = 14.0;
+pub const SCROLLBAR_WIDTH: f32 = 14.0;
 const MARKER_HEIGHT: f32 = 2.0;
 const MIN_THUMB_HEIGHT: f32 = 20.0;
 

@@ -4,16 +4,18 @@ use tracing::{debug, error, info};
 
 use crate::action::{EditorAction, EditorEffect, Motion, Range};
 use crate::buffer::Buffer;
+use crate::diagnostics::DiagnosticStore;
 use crate::layout::SplitDirection;
 use crate::registers::Registers;
-use crate::syntax::loader::Loader;
 use crate::syntax::SyntaxState;
+use crate::syntax::loader::Loader;
 use crate::vim::mode::VimMode;
 use crate::workspace::Workspace;
 
 pub struct Editor {
     pub buffers: Vec<Buffer>,
     pub syntax_states: Vec<Option<SyntaxState>>,
+    pub diagnostics: DiagnosticStore,
     pub loader: Loader,
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
@@ -73,6 +75,7 @@ impl Editor {
         Self {
             buffers: Vec::new(),
             syntax_states: Vec::new(),
+            diagnostics: DiagnosticStore::new(),
             loader,
             workspaces: vec![workspace],
             active_workspace: 0,
@@ -137,24 +140,24 @@ impl Editor {
         let (win, _) = current_ref!(self);
         let cur_buf = win.buffer_id;
         let cur_cursor = win.cursor;
-        if let Some((buf_id, cursor)) = self.jump_list.backward(cur_buf, cur_cursor) {
-            if buf_id < self.buffers.len() {
-                let len_chars = self.buffers[buf_id].len_chars();
-                self.workspaces[self.active_workspace].switch_buffer(buf_id, len_chars);
-                self.workspaces[self.active_workspace].window_mut().cursor =
-                    self.buffers[buf_id].clamp_cursor(cursor);
-            }
+        if let Some((buf_id, cursor)) = self.jump_list.backward(cur_buf, cur_cursor)
+            && buf_id < self.buffers.len()
+        {
+            let len_chars = self.buffers[buf_id].len_chars();
+            self.workspaces[self.active_workspace].switch_buffer(buf_id, len_chars);
+            self.workspaces[self.active_workspace].window_mut().cursor =
+                self.buffers[buf_id].clamp_cursor(cursor);
         }
     }
 
     fn jump_forward(&mut self) {
-        if let Some((buf_id, cursor)) = self.jump_list.forward() {
-            if buf_id < self.buffers.len() {
-                let len_chars = self.buffers[buf_id].len_chars();
-                self.workspaces[self.active_workspace].switch_buffer(buf_id, len_chars);
-                self.workspaces[self.active_workspace].window_mut().cursor =
-                    self.buffers[buf_id].clamp_cursor(cursor);
-            }
+        if let Some((buf_id, cursor)) = self.jump_list.forward()
+            && buf_id < self.buffers.len()
+        {
+            let len_chars = self.buffers[buf_id].len_chars();
+            self.workspaces[self.active_workspace].switch_buffer(buf_id, len_chars);
+            self.workspaces[self.active_workspace].window_mut().cursor =
+                self.buffers[buf_id].clamp_cursor(cursor);
         }
     }
 
@@ -267,6 +270,7 @@ impl Editor {
         if buf_id < self.syntax_states.len() {
             self.syntax_states.remove(buf_id);
         }
+        self.diagnostics.remove_buffer(buf_id);
         let buf_count = self.buffers.len();
         for ws in &mut self.workspaces {
             ws.fix_buffer_ids_after_remove(buf_id, buf_count);
@@ -309,11 +313,7 @@ impl Editor {
                     .take_while(|c| c.is_whitespace())
                     .collect();
 
-                let line_to_cursor: String = buf
-                    .rope()
-                    .slice(line_start..cursor)
-                    .chars()
-                    .collect();
+                let line_to_cursor: String = buf.rope().slice(line_start..cursor).chars().collect();
                 let last_significant = line_to_cursor.trim_end().chars().last();
 
                 let new_indent = match last_significant {
@@ -806,14 +806,19 @@ impl Editor {
         let cursor_before = win.cursor;
         let mut cursor = win.cursor;
         for _ in 0..count {
-            let next = win.search_matches.iter().find(|&&m| m > cursor).or(win.search_matches.first());
+            let next = win
+                .search_matches
+                .iter()
+                .find(|&&m| m > cursor)
+                .or(win.search_matches.first());
             if let Some(&pos) = next {
                 cursor = pos;
             }
         }
 
         let total = win.search_matches.len();
-        let current = win.search_matches
+        let current = win
+            .search_matches
             .iter()
             .position(|&m| m == cursor)
             .map(|i| i + 1)
@@ -845,7 +850,8 @@ impl Editor {
         let cursor_before = win.cursor;
         let mut cursor = win.cursor;
         for _ in 0..count {
-            let prev = win.search_matches
+            let prev = win
+                .search_matches
                 .iter()
                 .rev()
                 .find(|&&m| m < cursor)
@@ -856,7 +862,8 @@ impl Editor {
         }
 
         let total = win.search_matches.len();
-        let current = win.search_matches
+        let current = win
+            .search_matches
             .iter()
             .position(|&m| m == cursor)
             .map(|i| i + 1)

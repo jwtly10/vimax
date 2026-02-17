@@ -758,6 +758,7 @@ impl InputState {
         self.emit_operator(operator, start, end)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn resolve_operator_with_find_char(
         &mut self,
         operator: Operator,

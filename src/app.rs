@@ -454,6 +454,16 @@ impl Remax {
                         }
                         LspIncoming::Notification { method, params } => {
                             debug!(?method, ?params, "got notification");
+                            if method == "textDocument/publishDiagnostics"
+                                && let Some((buf_id, diags)) =
+                                    crate::diagnostics::parse_publish_diagnostics(
+                                        &params,
+                                        &self.editor.buffers,
+                                    )
+                            {
+                                debug!(buf_id, count = diags.len(), "setting diagnostics");
+                                self.editor.diagnostics.set_for_buffer(buf_id, diags);
+                            }
                         }
                         LspIncoming::ServerRequest { id, method, params } => {
                             debug!(?id, ?method, ?params, "got server request");
@@ -508,6 +518,27 @@ impl Remax {
         let mut modeline_row = row![mode_label, buffer_name, Space::new().width(Length::Fill),]
             .align_y(iced::Alignment::Center);
 
+        let active_buf_id = active_win.buffer_id;
+        let (error_count, warning_count) = self.editor.diagnostics.counts_for_buffer(active_buf_id);
+        if error_count > 0 || warning_count > 0 {
+            let mut diag_parts = row![].align_y(iced::Alignment::Center);
+            if error_count > 0 {
+                diag_parts = diag_parts.push(
+                    text(format!("E:{} ", error_count))
+                        .size(13)
+                        .color(iced::Color::from_rgb(1.0, 0.3, 0.3)),
+                );
+            }
+            if warning_count > 0 {
+                diag_parts = diag_parts.push(
+                    text(format!("W:{} ", warning_count))
+                        .size(13)
+                        .color(iced::Color::from_rgb(1.0, 0.8, 0.2)),
+                );
+            }
+            modeline_row = modeline_row.push(diag_parts);
+        }
+
         for (lang_name, initialized) in ws.lsp_manager.server_statuses() {
             let dot_color = if initialized {
                 iced::Color::from_rgb(0.3, 0.8, 0.3)
@@ -526,6 +557,7 @@ impl Remax {
 
         modeline_row = modeline_row.push(position);
 
+        let sb_w = ui::scrollbar::SCROLLBAR_WIDTH;
         let modeline = container(modeline_row)
             .style(|_theme: &Theme| container::Style {
                 background: Some(iced::Background::Color(iced::Color::from_rgb(
@@ -534,7 +566,12 @@ impl Remax {
                 ..Default::default()
             })
             .width(Length::Fill)
-            .padding([2, 0]);
+            .padding(iced::Padding {
+                top: 2.0,
+                bottom: 2.0,
+                left: 0.0,
+                right: sb_w,
+            });
 
         let bottom_section: Element<'_, Message> = if let Some(picker) = &self.picker {
             picker.view()
@@ -699,6 +736,18 @@ impl Remax {
                 });
             }
         }
+        // Add diagnostic markers
+        for diag in self.editor.diagnostics.get_for_buffer(win.buffer_id) {
+            let color = match diag.severity {
+                crate::diagnostics::Severity::Error => iced::Color::from_rgba(1.0, 0.3, 0.3, 0.9),
+                crate::diagnostics::Severity::Warning => iced::Color::from_rgba(1.0, 0.8, 0.2, 0.9),
+                _ => iced::Color::from_rgba(0.3, 0.7, 1.0, 0.7),
+            };
+            markers.push(ScrollbarMarker {
+                line: diag.line,
+                color,
+            });
+        }
         markers
     }
 
@@ -729,6 +778,12 @@ impl Remax {
                         Vec::new()
                     };
 
+                let visible_diags = self.editor.diagnostics.for_line_range(
+                    win.buffer_id,
+                    win.scroll_y,
+                    win.scroll_y + win.visible_lines + 2,
+                );
+
                 let grid = text_grid::text_grid(
                     buffer,
                     win.cursor,
@@ -744,6 +799,7 @@ impl Remax {
                     *win_id,
                     is_active,
                     highlights,
+                    visible_diags,
                 );
 
                 let markers = self.build_scrollbar_markers(win, buffer);

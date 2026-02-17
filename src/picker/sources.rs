@@ -7,8 +7,8 @@ use ropey::Rope;
 use crate::action::EditorAction;
 use crate::buffer::Buffer;
 use crate::picker::{DetailSpan, Picker, PickerItem};
-use crate::syntax::loader::Loader;
 use crate::syntax::SyntaxState;
+use crate::syntax::loader::Loader;
 
 /// Build a picker for switching between open buffers.
 pub fn buffer_picker(buffers: &[Buffer], cwd: &Path, restore_buffer: Option<usize>) -> Picker {
@@ -157,10 +157,10 @@ pub fn parse_lsp_locations(result: &serde_json::Value) -> Vec<lsp_types::Locatio
     if result.is_null() {
         return Vec::new();
     }
-    if result.get("uri").is_some() {
-        if let Ok(loc) = serde_json::from_value::<lsp_types::Location>(result.clone()) {
-            return vec![loc];
-        }
+    if result.get("uri").is_some()
+        && let Ok(loc) = serde_json::from_value::<lsp_types::Location>(result.clone())
+    {
+        return vec![loc];
     }
     if let Some(arr) = result.as_array() {
         if arr.is_empty() {

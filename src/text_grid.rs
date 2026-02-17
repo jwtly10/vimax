@@ -1,4 +1,5 @@
 use crate::buffer::Buffer;
+use crate::diagnostics::{Diagnostic, Severity};
 use crate::syntax::highlight::HighlightSpan;
 use iced::advanced::layout;
 use iced::advanced::renderer::{self, Renderer as _};
@@ -26,6 +27,7 @@ pub struct TextGrid<'a> {
     window_id: usize,
     is_active: bool,
     highlights: Vec<HighlightSpan>,
+    diagnostics: &'a [Diagnostic],
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -40,6 +42,7 @@ pub fn text_grid<'a>(
     window_id: usize,
     is_active: bool,
     highlights: Vec<HighlightSpan>,
+    diagnostics: &'a [Diagnostic],
 ) -> Element<'a, crate::app::Message> {
     Element::new(TextGrid {
         buffer,
@@ -52,6 +55,7 @@ pub fn text_grid<'a>(
         window_id,
         is_active,
         highlights,
+        diagnostics,
     })
 }
 
@@ -413,6 +417,40 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
 
                             run_start = run_end;
                         }
+                    }
+                }
+
+                for diag in self.diagnostics.iter().filter(|d| d.line == line_idx) {
+                    let underline_color = match diag.severity {
+                        Severity::Error => Color::from_rgba(1.0, 0.3, 0.3, 0.8),
+                        Severity::Warning => Color::from_rgba(1.0, 0.8, 0.2, 0.7),
+                        Severity::Info => Color::from_rgba(0.3, 0.7, 1.0, 0.6),
+                        Severity::Hint => Color::from_rgba(0.5, 0.8, 0.5, 0.5),
+                    };
+
+                    let col_start = diag.col_start;
+                    let col_end = diag.col_end;
+
+                    if col_end > scroll_x {
+                        let draw_start = col_start.saturating_sub(scroll_x);
+                        let draw_end = col_end.saturating_sub(scroll_x);
+                        let text_x = bounds.x + GUTTER_WIDTH + 8.0;
+                        let ul_x = text_x + (draw_start as f32 * CHAR_WIDTH);
+                        let ul_w = ((draw_end - draw_start) as f32 * CHAR_WIDTH)
+                            .min(bounds.width - (ul_x - bounds.x));
+
+                        renderer.fill_quad(
+                            renderer::Quad {
+                                bounds: Rectangle {
+                                    x: ul_x,
+                                    y: y + LINE_HEIGHT - 3.0,
+                                    width: ul_w,
+                                    height: 2.0,
+                                },
+                                ..renderer::Quad::default()
+                            },
+                            underline_color,
+                        );
                     }
                 }
 
