@@ -28,6 +28,7 @@ pub struct TextGrid<'a> {
     is_active: bool,
     highlights: Vec<HighlightSpan>,
     diagnostics: &'a [Diagnostic],
+    show_inline_diagnostics: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -43,6 +44,7 @@ pub fn text_grid<'a>(
     is_active: bool,
     highlights: Vec<HighlightSpan>,
     diagnostics: &'a [Diagnostic],
+    show_inline_diagnostics: bool,
 ) -> Element<'a, crate::app::Message> {
     Element::new(TextGrid {
         buffer,
@@ -56,6 +58,7 @@ pub fn text_grid<'a>(
         is_active,
         highlights,
         diagnostics,
+        show_inline_diagnostics,
     })
 }
 
@@ -451,6 +454,81 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                             },
                             underline_color,
                         );
+                    }
+                }
+
+                // Inline diagnostic ghost text
+                if self.show_inline_diagnostics {
+                    if let Some(diag) = self
+                        .diagnostics
+                        .iter()
+                        .filter(|d| d.line == line_idx)
+                        .min_by_key(|d| match d.severity {
+                            Severity::Error => 0,
+                            Severity::Warning => 1,
+                            Severity::Info => 2,
+                            Severity::Hint => 3,
+                        })
+                    {
+                        let ghost_color = match diag.severity {
+                            Severity::Error => Color::from_rgba(1.0, 0.35, 0.35, 0.5),
+                            Severity::Warning => Color::from_rgba(1.0, 0.8, 0.25, 0.4),
+                            Severity::Info => Color::from_rgba(0.4, 0.7, 1.0, 0.4),
+                            Severity::Hint => Color::from_rgba(0.5, 0.8, 0.5, 0.35),
+                        };
+
+                        let line_len = display_str.chars().count();
+                        let ghost_col = line_len.saturating_sub(scroll_x) + 2;
+                        let ghost_x = text_x + (ghost_col as f32 * CHAR_WIDTH);
+
+                        // Truncate message to first line, limit width
+                        let first_line = diag
+                            .message
+                            .lines()
+                            .next()
+                            .unwrap_or(&diag.message);
+                        let avail_chars =
+                            ((bounds.width - (ghost_x - bounds.x)) / CHAR_WIDTH) as usize;
+                        if avail_chars > 4 {
+                            let icon = match diag.severity {
+                                Severity::Error => "■ ",
+                                Severity::Warning => "▲ ",
+                                Severity::Info => "● ",
+                                Severity::Hint => "○ ",
+                            };
+                            let max_msg = avail_chars.saturating_sub(icon.len());
+                            let msg = if first_line.len() > max_msg {
+                                format!(
+                                    "{}{}…",
+                                    icon,
+                                    &first_line[..max_msg.saturating_sub(1)]
+                                )
+                            } else {
+                                format!("{}{}", icon, first_line)
+                            };
+
+                            renderer.fill_text(
+                                iced_text::Text {
+                                    content: msg,
+                                    bounds: Size::new(
+                                        bounds.width - (ghost_x - bounds.x),
+                                        LINE_HEIGHT,
+                                    ),
+                                    size: (FONT_SIZE - 1.0).into(),
+                                    line_height: iced_text::LineHeight::Absolute(
+                                        LINE_HEIGHT.into(),
+                                    ),
+                                    font: iced::Font::MONOSPACE,
+                                    align_x: iced::Alignment::Start.into(),
+                                    align_y: alignment::Vertical::Top,
+                                    shaping: iced_text::Shaping::Basic,
+                                    wrapping: iced_text::Wrapping::None,
+                                },
+                                iced::Point::new(ghost_x, y),
+                                ghost_color,
+                                *viewport,
+                            );
+                        }
                     }
                 }
 

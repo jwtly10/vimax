@@ -11,6 +11,7 @@ use crate::lsp::LspIncoming;
 use crate::picker::{Picker, PickerEvent};
 use crate::text_grid;
 use crate::ui;
+use crate::ui::hover::{DiagnosticEntry, HoverContent, HoverPopup};
 use crate::ui::scrollbar::ScrollbarMarker;
 use crate::ui::toast::{ToastLevel, ToastManager};
 use crate::vim::VimLayer;
@@ -37,6 +38,8 @@ pub struct Remax {
     toast_manager: ToastManager,
     completions: Option<CompletionState>,
     completion_debounce: Option<Instant>,
+    hover_popup: Option<HoverPopup>,
+    show_inline_diagnostics: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +153,8 @@ impl Remax {
                 toast_manager: ToastManager::new(),
                 completions: None,
                 completion_debounce: None,
+                hover_popup: None,
+                show_inline_diagnostics: true,
             },
             Task::none(),
         )
@@ -219,6 +224,12 @@ impl Remax {
                 modifiers,
                 text,
             } => {
+                // Dismiss hover on any keypress
+                if self.hover_popup.is_some() {
+                    self.hover_popup = None;
+                    return Task::none();
+                }
+
                 // Some elements require hijacking keystrokes
                 if self.picker.is_some() {
                     return self.handle_picker_key(&key, &modifiers, text.as_deref());
@@ -260,6 +271,21 @@ impl Remax {
                         | EditorAction::OpenDiagnosticsPicker => {
                             self.completions = None;
                             self.open_picker(action.clone());
+                            return Task::none();
+                        }
+                        EditorAction::ShowDiagnosticUnderCursor => {
+                            self.show_diagnostic_hover();
+                            return Task::none();
+                        }
+                        EditorAction::ToggleInlineDiagnostics => {
+                            self.show_inline_diagnostics = !self.show_inline_diagnostics;
+                            let state = if self.show_inline_diagnostics {
+                                "on"
+                            } else {
+                                "off"
+                            };
+                            self.editor.status_message =
+                                format!("Inline diagnostics: {}", state);
                             return Task::none();
                         }
                         action => match self.editor.execute(action.clone()) {
@@ -488,6 +514,10 @@ impl Remax {
                                         debug!("completion response received");
                                         self.handle_completion_response(result);
                                     }
+                                    "textDocument/hover" => {
+                                        debug!(?result, "hover response received");
+                                        self.handle_hover_response(result);
+                                    }
                                     _ => {
                                         debug!(method = %pending.method, "response matched pending request");
                                     }
@@ -682,6 +712,10 @@ impl Remax {
             layers = layers.push(overlay);
         }
 
+        if let Some(hover) = &self.hover_popup {
+            layers = layers.push(hover.view());
+        }
+
         layers = layers.push(self.toast_manager.view());
         layers.into()
     }
@@ -796,6 +830,57 @@ impl Remax {
         self.editor.workspaces[ws_idx]
             .lsp_manager
             .request_completions(buf, cursor);
+    }
+
+    fn handle_hover_response(&mut self, result: serde_json::Value) {
+        if result.is_null() {
+            self.editor.status_message = String::from("No hover info");
+            return;
+        }
+        let ws = self.editor.workspace();
+        let win = ws.window();
+        let buf = &self.editor.buffers[win.buffer_id];
+        let (cursor_line, cursor_col) = buf.cursor_position(win.cursor);
+
+        self.hover_popup = Some(HoverPopup {
+            content: HoverContent::LspHover(result),
+            cursor_line,
+            cursor_col,
+            scroll_y: win.scroll_y,
+            scroll_x: win.scroll_x,
+        });
+    }
+
+    fn show_diagnostic_hover(&mut self) {
+        let ws = self.editor.workspace();
+        let win = ws.window();
+        let buf_id = win.buffer_id;
+        let buf = &self.editor.buffers[buf_id];
+        let (cursor_line, cursor_col) = buf.cursor_position(win.cursor);
+
+        let diags = self.editor.diagnostics.get_for_buffer(buf_id);
+        let entries: Vec<DiagnosticEntry> = diags
+            .iter()
+            .filter(|d| d.line == cursor_line)
+            .map(|d| DiagnosticEntry {
+                severity: d.severity,
+                message: d.message.clone(),
+                source: d.source.clone(),
+            })
+            .collect();
+
+        if entries.is_empty() {
+            self.editor.status_message = String::from("No diagnostics on this line");
+            return;
+        }
+
+        self.hover_popup = Some(HoverPopup {
+            content: HoverContent::Diagnostic(entries),
+            cursor_line,
+            cursor_col,
+            scroll_y: win.scroll_y,
+            scroll_x: win.scroll_x,
+        });
     }
 
     fn handle_completion_response(&mut self, result: serde_json::Value) {
@@ -1030,6 +1115,7 @@ impl Remax {
                     is_active,
                     highlights,
                     visible_diags,
+                    self.show_inline_diagnostics,
                 );
 
                 let markers = self.build_scrollbar_markers(win, buffer);

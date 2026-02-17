@@ -623,6 +623,23 @@ impl Editor {
             EditorAction::OpenBufferPicker
             | EditorAction::OpenFilePicker { .. }
             | EditorAction::OpenDiagnosticsPicker => {}
+            EditorAction::LspHover => {
+                let (win, buf) = current_ref!(self);
+                let cursor = win.cursor;
+                if self.workspaces[self.active_workspace]
+                    .lsp_manager
+                    .request_hover(buf, cursor)
+                    .is_none()
+                {
+                    self.status_message = String::from("LSP not ready");
+                }
+            }
+            EditorAction::ShowDiagnosticUnderCursor => {
+                // Handled by app.rs
+            }
+            EditorAction::ToggleInlineDiagnostics => {
+                // Handled by app.rs
+            }
             EditorAction::SwitchToBuffer(buf_id) => {
                 if buf_id < self.buffers.len() {
                     let len_chars = self.buffers[buf_id].len_chars();

@@ -120,6 +120,9 @@ pub enum EditorAction {
         delete_backward: usize,
         insert_text: String,
     },
+    LspHover,
+    ShowDiagnosticUnderCursor,
+    ToggleInlineDiagnostics,
 }
 
 pub enum EditorEffect {
