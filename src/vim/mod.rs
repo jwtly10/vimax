@@ -57,6 +57,11 @@ impl VimLayer {
         actions
     }
 
+    pub fn force_mode(&mut self, mode: VimMode) {
+        self.input.mode = mode;
+        self.input.selection_anchor = None;
+    }
+
     pub fn mode(&self) -> VimMode {
         self.input.mode
     }

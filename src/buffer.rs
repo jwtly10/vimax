@@ -36,6 +36,21 @@ impl Buffer {
         }
     }
 
+    pub fn new_readonly(content: &str, name: &str) -> Self {
+        Self {
+            rope: Rope::from_str(content),
+            read_only: true,
+            name: String::from(name),
+            file_path: None,
+            modified: false,
+            undo_stack: UndoStack::new(),
+            version: 0,
+            indent_width: 4,
+            use_tabs: false,
+            language: None,
+        }
+    }
+
     pub fn from_str(s: &str, buf_name: &str, file_path: &Path, read_only: bool) -> Self {
         let rope = Rope::from_str(s);
         let (indent_width, use_tabs) = (4, false); // TODO: detect_indentation(&rope)

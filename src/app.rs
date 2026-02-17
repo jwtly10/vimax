@@ -11,7 +11,8 @@ use crate::lsp::LspIncoming;
 use crate::picker::{Picker, PickerEvent};
 use crate::text_grid;
 use crate::ui;
-use crate::ui::hover::{DiagnosticEntry, HoverContent, HoverPopup};
+use crate::ui::floating_panel::{FloatingPanel, PanelEvent, PanelKind, PanelPosition, PANEL_WINDOW_ID};
+use crate::ui::hover::extract_hover_text;
 use crate::ui::scrollbar::ScrollbarMarker;
 use crate::ui::toast::{ToastLevel, ToastManager};
 use crate::vim::VimLayer;
@@ -38,7 +39,7 @@ pub struct Remax {
     toast_manager: ToastManager,
     completions: Option<CompletionState>,
     completion_debounce: Option<Instant>,
-    hover_popup: Option<HoverPopup>,
+    floating_panel: Option<FloatingPanel>,
     show_inline_diagnostics: bool,
 }
 
@@ -153,7 +154,7 @@ impl Remax {
                 toast_manager: ToastManager::new(),
                 completions: None,
                 completion_debounce: None,
-                hover_popup: None,
+                floating_panel: None,
                 show_inline_diagnostics: true,
             },
             Task::none(),
@@ -224,17 +225,37 @@ impl Remax {
                 modifiers,
                 text,
             } => {
-                // Dismiss hover on any keypress
-                if self.hover_popup.is_some() {
-                    self.hover_popup = None;
+                // 1. Panel focused → panel handles ALL keys
+                if let Some(panel) = &mut self.floating_panel
+                    && panel.focused
+                {
+                    let event = panel.panel_buffer.handle_key(
+                        &key,
+                        &modified_key,
+                        &modifiers,
+                        text.as_deref(),
+                    );
+                    match event {
+                        PanelEvent::Dismiss => {
+                            self.floating_panel = None;
+                        }
+                        PanelEvent::YankToRegister(t) => {
+                            self.editor.registers.unnamed = t.clone();
+                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                let _ = clipboard.set_text(t);
+                            }
+                        }
+                        PanelEvent::Noop => {}
+                    }
                     return Task::none();
                 }
 
-                // Some elements require hijacking keystrokes
+                // 2. Picker hijacks
                 if self.picker.is_some() {
                     return self.handle_picker_key(&key, &modifiers, text.as_deref());
                 }
 
+                // 3. Completions hijacks
                 if self.completions.is_some() {
                     let intercept = Self::is_completion_key(&key, &modifiers);
                     if intercept {
@@ -251,6 +272,7 @@ impl Remax {
                     "editor key event"
                 );
 
+                // 4. Vim processes the key
                 let actions = {
                     let buffer = self.editor.buffer();
                     let cursor = self.editor.cursor();
@@ -264,6 +286,30 @@ impl Remax {
                     )
                 };
 
+                // 5. Panel unfocused → check for trigger re-press or dismiss
+                if self.floating_panel.is_some() {
+                    if actions.is_empty() {
+                        // Pending multi-key sequence (e.g. 'g' in 'gt'), wait
+                        return Task::none();
+                    }
+
+                    let panel_kind = self.floating_panel.as_ref().unwrap().kind;
+                    let is_retrigger = actions.iter().any(|a| matches!(
+                        (a, panel_kind),
+                        (EditorAction::LspHover, PanelKind::LspHover)
+                            | (EditorAction::ShowDiagnosticUnderCursor, PanelKind::Diagnostic)
+                    ));
+
+                    if is_retrigger {
+                        self.floating_panel.as_mut().unwrap().focus();
+                        return Task::none();
+                    }
+
+                    // Dismiss and fall through to process actions normally
+                    self.floating_panel = None;
+                }
+
+                // 6. Process actions normally
                 for action in &actions {
                     match action {
                         EditorAction::OpenBufferPicker
@@ -306,77 +352,137 @@ impl Remax {
                 self.editor.ensure_syntax_current();
             }
             Message::ScrollLines { delta, window_id } => {
-                let ws = self.editor.workspace_mut();
-                if window_id < ws.windows.len() {
-                    let buf_id = ws.windows[window_id].buffer_id;
-                    let old_scroll = ws.windows[window_id].scroll_y;
-                    let cursor = ws.windows[window_id].cursor;
-                    let total = self.editor.buffers[buf_id].total_lines();
-                    let (cur_line, cur_col) = self.editor.buffers[buf_id].cursor_position(cursor);
-
+                if window_id == PANEL_WINDOW_ID {
+                    if let Some(panel) = &mut self.floating_panel {
+                        let total = panel.panel_buffer.buffer.total_lines();
+                        panel.panel_buffer.window.scroll_lines(delta, SCROLL_SPEED, total);
+                    }
+                } else {
                     let ws = self.editor.workspace_mut();
-                    ws.windows[window_id].scroll_lines(delta, SCROLL_SPEED, total);
-                    let new_scroll = ws.windows[window_id].scroll_y;
-                    let scroll_delta = new_scroll as isize - old_scroll as isize;
-                    if scroll_delta != 0 {
-                        let new_line = (cur_line as isize + scroll_delta).max(0) as usize;
-                        let new_cursor =
-                            self.editor.buffers[buf_id].cursor_from_position(new_line, cur_col);
-                        self.editor.workspace_mut().windows[window_id].cursor = new_cursor;
+                    if window_id < ws.windows.len() {
+                        let buf_id = ws.windows[window_id].buffer_id;
+                        let old_scroll = ws.windows[window_id].scroll_y;
+                        let cursor = ws.windows[window_id].cursor;
+                        let total = self.editor.buffers[buf_id].total_lines();
+                        let (cur_line, cur_col) =
+                            self.editor.buffers[buf_id].cursor_position(cursor);
+
+                        let ws = self.editor.workspace_mut();
+                        ws.windows[window_id].scroll_lines(delta, SCROLL_SPEED, total);
+                        let new_scroll = ws.windows[window_id].scroll_y;
+                        let scroll_delta = new_scroll as isize - old_scroll as isize;
+                        if scroll_delta != 0 {
+                            let new_line = (cur_line as isize + scroll_delta).max(0) as usize;
+                            let new_cursor = self.editor.buffers[buf_id]
+                                .cursor_from_position(new_line, cur_col);
+                            self.editor.workspace_mut().windows[window_id].cursor = new_cursor;
+                        }
                     }
                 }
             }
             Message::ScrollCols { delta, window_id } => {
-                let ws = self.editor.workspace_mut();
-                if window_id < ws.windows.len() {
-                    let buf_id = ws.windows[window_id].buffer_id;
-                    let max_len = self.editor.buffers[buf_id].max_line_len();
-                    self.editor.workspace_mut().windows[window_id].scroll_cols(
-                        delta,
-                        SCROLL_SPEED,
-                        max_len,
-                    );
+                if window_id == PANEL_WINDOW_ID {
+                    if let Some(panel) = &mut self.floating_panel {
+                        let max_len = panel.panel_buffer.buffer.max_line_len();
+                        panel
+                            .panel_buffer
+                            .window
+                            .scroll_cols(delta, SCROLL_SPEED, max_len);
+                    }
+                } else {
+                    let ws = self.editor.workspace_mut();
+                    if window_id < ws.windows.len() {
+                        let buf_id = ws.windows[window_id].buffer_id;
+                        let max_len = self.editor.buffers[buf_id].max_line_len();
+                        self.editor.workspace_mut().windows[window_id].scroll_cols(
+                            delta,
+                            SCROLL_SPEED,
+                            max_len,
+                        );
+                    }
                 }
             }
             Message::ScrollbarJump { line, window_id } => {
-                let ws = self.editor.workspace_mut();
-                ws.active_window = window_id;
-                if window_id < ws.windows.len() {
-                    let buf_id = ws.windows[window_id].buffer_id;
-                    let (_, cur_col) = self.editor.buffers[buf_id]
-                        .cursor_position(self.editor.workspace().windows[window_id].cursor);
-                    let new_cursor =
-                        self.editor.buffers[buf_id].cursor_from_position(line, cur_col);
-                    self.editor.workspace_mut().windows[window_id].cursor = new_cursor;
-                    self.editor.ensure_cursor_visible();
+                if window_id == PANEL_WINDOW_ID {
+                    if let Some(panel) = &mut self.floating_panel {
+                        let new_cursor =
+                            panel.panel_buffer.buffer.cursor_from_position(line, 0);
+                        panel.panel_buffer.window.cursor = new_cursor;
+                        panel
+                            .panel_buffer
+                            .window
+                            .ensure_cursor_visible(&panel.panel_buffer.buffer);
+                    }
+                } else {
+                    let ws = self.editor.workspace_mut();
+                    ws.active_window = window_id;
+                    if window_id < ws.windows.len() {
+                        let buf_id = ws.windows[window_id].buffer_id;
+                        let (_, cur_col) = self.editor.buffers[buf_id]
+                            .cursor_position(self.editor.workspace().windows[window_id].cursor);
+                        let new_cursor =
+                            self.editor.buffers[buf_id].cursor_from_position(line, cur_col);
+                        self.editor.workspace_mut().windows[window_id].cursor = new_cursor;
+                        self.editor.ensure_cursor_visible();
+                    }
                 }
             }
             Message::ScrollbarDrag {
                 scroll_y,
                 window_id,
             } => {
-                let ws = self.editor.workspace_mut();
-                if window_id < ws.windows.len() {
-                    let buf_id = ws.windows[window_id].buffer_id;
-                    let total = self.editor.buffers[buf_id].total_lines();
-                    let max_scroll = total.saturating_sub(1);
-                    self.editor.workspace_mut().windows[window_id].scroll_y =
-                        scroll_y.min(max_scroll);
+                if window_id == PANEL_WINDOW_ID {
+                    if let Some(panel) = &mut self.floating_panel {
+                        let total = panel.panel_buffer.buffer.total_lines();
+                        let max_scroll = total.saturating_sub(1);
+                        panel.panel_buffer.window.scroll_y = scroll_y.min(max_scroll);
+                    }
+                } else {
+                    let ws = self.editor.workspace_mut();
+                    if window_id < ws.windows.len() {
+                        let buf_id = ws.windows[window_id].buffer_id;
+                        let total = self.editor.buffers[buf_id].total_lines();
+                        let max_scroll = total.saturating_sub(1);
+                        self.editor.workspace_mut().windows[window_id].scroll_y =
+                            scroll_y.min(max_scroll);
+                    }
                 }
             }
             Message::MouseClick { x, y, window_id } => {
-                let ws = self.editor.workspace_mut();
-                ws.active_window = window_id;
-                if window_id < ws.windows.len() {
-                    let win = &ws.windows[window_id];
-                    let line = win.scroll_y + (y / text_grid::LINE_HEIGHT) as usize;
-                    let col = win.scroll_x
-                        + ((x - text_grid::GUTTER_WIDTH - 8.0).max(0.0) / text_grid::CHAR_WIDTH)
-                            as usize;
-                    let buf_id = win.buffer_id;
-                    let new_cursor = self.editor.buffers[buf_id].cursor_from_position(line, col);
-                    self.editor.workspace_mut().windows[window_id].cursor = new_cursor;
-                    self.editor.ensure_cursor_visible();
+                if window_id == PANEL_WINDOW_ID {
+                    if let Some(panel) = &mut self.floating_panel {
+                        let win = &panel.panel_buffer.window;
+                        let line =
+                            win.scroll_y + (y / text_grid::LINE_HEIGHT) as usize;
+                        let col = win.scroll_x
+                            + ((x - text_grid::GUTTER_WIDTH - 8.0).max(0.0)
+                                / text_grid::CHAR_WIDTH) as usize;
+                        let new_cursor =
+                            panel.panel_buffer.buffer.cursor_from_position(line, col);
+                        panel.panel_buffer.window.cursor = new_cursor;
+                        panel
+                            .panel_buffer
+                            .window
+                            .ensure_cursor_visible(&panel.panel_buffer.buffer);
+                        // Auto-focus the panel on click
+                        panel.focused = true;
+                    }
+                } else {
+                    let ws = self.editor.workspace_mut();
+                    ws.active_window = window_id;
+                    if window_id < ws.windows.len() {
+                        let win = &ws.windows[window_id];
+                        let line = win.scroll_y + (y / text_grid::LINE_HEIGHT) as usize;
+                        let col = win.scroll_x
+                            + ((x - text_grid::GUTTER_WIDTH - 8.0).max(0.0)
+                                / text_grid::CHAR_WIDTH)
+                                as usize;
+                        let buf_id = win.buffer_id;
+                        let new_cursor =
+                            self.editor.buffers[buf_id].cursor_from_position(line, col);
+                        self.editor.workspace_mut().windows[window_id].cursor = new_cursor;
+                        self.editor.ensure_cursor_visible();
+                    }
                 }
             }
             Message::ViewportResized {
@@ -384,20 +490,28 @@ impl Remax {
                 cols,
                 window_id,
             } => {
-                let mut resized = false;
-                {
-                    let ws = self.editor.workspace_mut();
-                    if window_id < ws.windows.len() {
-                        let win = &mut ws.windows[window_id];
-                        if win.visible_lines != lines || win.visible_cols != cols {
-                            win.visible_lines = lines;
-                            win.visible_cols = cols;
-                            resized = true;
+                if window_id == PANEL_WINDOW_ID {
+                    if let Some(panel) = &mut self.floating_panel {
+                        let win = &mut panel.panel_buffer.window;
+                        win.visible_lines = lines;
+                        win.visible_cols = cols;
+                    }
+                } else {
+                    let mut resized = false;
+                    {
+                        let ws = self.editor.workspace_mut();
+                        if window_id < ws.windows.len() {
+                            let win = &mut ws.windows[window_id];
+                            if win.visible_lines != lines || win.visible_cols != cols {
+                                win.visible_lines = lines;
+                                win.visible_cols = cols;
+                                resized = true;
+                            }
                         }
                     }
-                }
-                if resized {
-                    self.editor.ensure_cursor_visible();
+                    if resized {
+                        self.editor.ensure_cursor_visible();
+                    }
                 }
             }
             Message::CompletionTick(now) => {
@@ -572,8 +686,22 @@ impl Remax {
         let active_win = ws.window();
         let (cursor_line, cursor_col) = active_buf.cursor_position(active_win.cursor);
 
-        let (mr, mg, mb) = self.vim.mode_color();
-        let mode_label = text(format!(" {} ", self.vim.mode()))
+        // Show panel's vim mode when panel is focused
+        let panel_focused = self
+            .floating_panel
+            .as_ref()
+            .is_some_and(|p| p.focused);
+        let (mr, mg, mb) = if panel_focused {
+            self.floating_panel.as_ref().unwrap().panel_buffer.vim.mode_color()
+        } else {
+            self.vim.mode_color()
+        };
+        let mode_display = if panel_focused {
+            self.floating_panel.as_ref().unwrap().panel_buffer.vim.mode()
+        } else {
+            self.vim.mode()
+        };
+        let mode_label = text(format!(" {} ", mode_display))
             .size(14)
             .color(iced::Color::from_rgb(mr, mg, mb));
 
@@ -648,10 +776,19 @@ impl Remax {
         let bottom_section: Element<'_, Message> = if let Some(picker) = &self.picker {
             picker.view()
         } else {
-            let cmdline_text = self
-                .vim
-                .status_line_override()
-                .unwrap_or_else(|| self.editor.status_message.clone());
+            let cmdline_text = if panel_focused {
+                self.floating_panel
+                    .as_ref()
+                    .unwrap()
+                    .panel_buffer
+                    .vim
+                    .status_line_override()
+                    .unwrap_or_else(|| self.editor.status_message.clone())
+            } else {
+                self.vim
+                    .status_line_override()
+                    .unwrap_or_else(|| self.editor.status_message.clone())
+            };
 
             container(
                 text(format!(" {}", cmdline_text))
@@ -712,8 +849,12 @@ impl Remax {
             layers = layers.push(overlay);
         }
 
-        if let Some(hover) = &self.hover_popup {
-            layers = layers.push(hover.view());
+        if let Some(panel) = &self.floating_panel {
+            let viewport_width = active_win.visible_cols as f32 * text_grid::CHAR_WIDTH
+                + text_grid::GUTTER_WIDTH
+                + 8.0;
+            let viewport_height = active_win.visible_lines as f32 * text_grid::LINE_HEIGHT;
+            layers = layers.push(panel.view(viewport_width, viewport_height));
         }
 
         layers = layers.push(self.toast_manager.view());
@@ -842,13 +983,20 @@ impl Remax {
         let buf = &self.editor.buffers[win.buffer_id];
         let (cursor_line, cursor_col) = buf.cursor_position(win.cursor);
 
-        self.hover_popup = Some(HoverPopup {
-            content: HoverContent::LspHover(result),
-            cursor_line,
-            cursor_col,
-            scroll_y: win.scroll_y,
-            scroll_x: win.scroll_x,
-        });
+        let lines = extract_hover_text(&result);
+        let content = lines.join("\n");
+
+        self.floating_panel = Some(FloatingPanel::new(
+            &content,
+            "Hover",
+            PanelKind::LspHover,
+            PanelPosition::AtCursor {
+                line: cursor_line,
+                col: cursor_col,
+                scroll_y: win.scroll_y,
+                scroll_x: win.scroll_x,
+            },
+        ));
     }
 
     fn show_diagnostic_hover(&mut self) {
@@ -859,28 +1007,49 @@ impl Remax {
         let (cursor_line, cursor_col) = buf.cursor_position(win.cursor);
 
         let diags = self.editor.diagnostics.get_for_buffer(buf_id);
-        let entries: Vec<DiagnosticEntry> = diags
+        let line_diags: Vec<_> = diags
             .iter()
             .filter(|d| d.line == cursor_line)
-            .map(|d| DiagnosticEntry {
-                severity: d.severity,
-                message: d.message.clone(),
-                source: d.source.clone(),
-            })
             .collect();
 
-        if entries.is_empty() {
+        if line_diags.is_empty() {
             self.editor.status_message = String::from("No diagnostics on this line");
             return;
         }
 
-        self.hover_popup = Some(HoverPopup {
-            content: HoverContent::Diagnostic(entries),
-            cursor_line,
-            cursor_col,
-            scroll_y: win.scroll_y,
-            scroll_x: win.scroll_x,
-        });
+        // Format diagnostics as plain text for the panel buffer
+        let mut text_lines = Vec::new();
+        for d in &line_diags {
+            let icon = match d.severity {
+                crate::diagnostics::Severity::Error => "E",
+                crate::diagnostics::Severity::Warning => "W",
+                crate::diagnostics::Severity::Info => "I",
+                crate::diagnostics::Severity::Hint => "H",
+            };
+            for (i, msg_line) in d.message.lines().enumerate() {
+                if i == 0 {
+                    text_lines.push(format!("[{}] {}", icon, msg_line));
+                } else {
+                    text_lines.push(format!("    {}", msg_line));
+                }
+            }
+            if let Some(src) = &d.source {
+                text_lines.push(format!("    [{}]", src));
+            }
+        }
+        let content = text_lines.join("\n");
+
+        self.floating_panel = Some(FloatingPanel::new(
+            &content,
+            "Diagnostics",
+            PanelKind::Diagnostic,
+            PanelPosition::AtCursor {
+                line: cursor_line,
+                col: cursor_col,
+                scroll_y: win.scroll_y,
+                scroll_x: win.scroll_x,
+            },
+        ));
     }
 
     fn handle_completion_response(&mut self, result: serde_json::Value) {
