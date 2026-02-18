@@ -94,6 +94,10 @@ impl Buffer {
         self.language
     }
 
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
     pub fn len_chars(&self) -> usize {
         self.rope.len_chars()
     }

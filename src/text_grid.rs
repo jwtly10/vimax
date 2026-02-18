@@ -458,6 +458,58 @@ impl<'a> Widget<crate::app::Message, iced::Theme, iced::Renderer> for TextGrid<'
                     }
                 }
 
+                // Inline diagnostic ghost text
+                let most_severe = self
+                    .diagnostics
+                    .iter()
+                    .filter(|d| d.line == line_idx)
+                    .min_by_key(|d| match d.severity {
+                        Severity::Error => 0,
+                        Severity::Warning => 1,
+                        Severity::Info => 2,
+                        Severity::Hint => 3,
+                    });
+                if let Some(diag) = most_severe {
+                    let line_len = display_str.chars().count();
+                    let ghost_col = line_len.saturating_sub(scroll_x) + 2;
+                    let ghost_x = text_x + (ghost_col as f32 * CHAR_WIDTH);
+                    let available_w = bounds.x + bounds.width - ghost_x;
+                    if available_w > CHAR_WIDTH * 10.0 {
+                        let max_chars = (available_w / CHAR_WIDTH) as usize;
+                        let msg = &diag.message;
+                        let first_line = msg.lines().next().unwrap_or(msg);
+                        let truncated = if first_line.chars().count() > max_chars.min(60) {
+                            let limit = max_chars.min(60).saturating_sub(1);
+                            let s: String = first_line.chars().take(limit).collect();
+                            format!("{}…", s)
+                        } else {
+                            first_line.to_string()
+                        };
+                        let ghost_color = match diag.severity {
+                            Severity::Error => Color::from_rgba(1.0, 0.3, 0.3, 0.4),
+                            Severity::Warning => Color::from_rgba(1.0, 0.8, 0.2, 0.4),
+                            Severity::Info => Color::from_rgba(0.3, 0.7, 1.0, 0.4),
+                            Severity::Hint => Color::from_rgba(0.5, 0.8, 0.5, 0.4),
+                        };
+                        renderer.fill_text(
+                            iced_text::Text {
+                                content: truncated,
+                                bounds: Size::new(available_w, LINE_HEIGHT),
+                                size: FONT_SIZE.into(),
+                                line_height: iced_text::LineHeight::Absolute(LINE_HEIGHT.into()),
+                                font: iced::Font::MONOSPACE,
+                                align_x: iced::Alignment::Start.into(),
+                                align_y: alignment::Vertical::Top,
+                                shaping: iced_text::Shaping::Basic,
+                                wrapping: iced_text::Wrapping::None,
+                            },
+                            iced::Point::new(ghost_x, y),
+                            ghost_color,
+                            *viewport,
+                        );
+                    }
+                }
+
                 if self.is_active && line_idx == cursor_line && cursor_col >= scroll_x {
                     let cursor_x = text_x + ((cursor_col - scroll_x) as f32 * CHAR_WIDTH);
 

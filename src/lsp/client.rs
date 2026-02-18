@@ -4,14 +4,15 @@ use lsp_types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument,
 };
 use lsp_types::request::{
-    Completion, GotoDeclaration, GotoDefinition, GotoImplementation, References, Request,
+    Completion, GotoDeclaration, GotoDefinition, GotoImplementation, HoverRequest, References,
+    Request,
 };
 use lsp_types::{
     CompletionContext, CompletionParams, CompletionTriggerKind, DidChangeTextDocumentParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    GotoDefinitionParams, ReferenceContext, ReferenceParams, TextDocumentContentChangeEvent,
-    TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams,
-    VersionedTextDocumentIdentifier,
+    GotoDefinitionParams, HoverParams, ReferenceContext, ReferenceParams,
+    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
+    TextDocumentPositionParams, VersionedTextDocumentIdentifier,
 };
 
 use super::{LspManager, offset_to_lsp_position, path_to_uri};
@@ -45,6 +46,20 @@ impl LspManager {
                 }),
                 work_done_progress_params: Default::default(),
                 partial_result_params: Default::default(),
+            },
+        )
+    }
+
+    pub fn request_hover(&mut self, buf: &Buffer, cursor: usize) -> Option<i64> {
+        let (server_id, uri, position) = self.resolve_position(buf, cursor)?;
+        self.send_request::<HoverRequest>(
+            server_id,
+            HoverParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri },
+                    position,
+                },
+                work_done_progress_params: Default::default(),
             },
         )
     }

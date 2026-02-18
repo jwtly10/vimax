@@ -65,6 +65,14 @@ impl VimLayer {
         self.input.status_line_override()
     }
 
+    pub fn force_normal(&mut self) {
+        self.input.mode = VimMode::Normal;
+        self.input.selection_anchor = None;
+        self.input.pending_operator = None;
+        self.input.pending_keys.clear();
+        self.input.count_accum = None;
+    }
+
     pub fn mode_color(&self) -> (f32, f32, f32) {
         self.input.mode_color()
     }

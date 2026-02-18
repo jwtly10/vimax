@@ -6,6 +6,7 @@ use crate::action::{EditorAction, EditorEffect};
 use crate::buffer::Buffer;
 use crate::completions::{CompletionEvent, CompletionState};
 use crate::editor::Editor;
+use crate::info_panel::{InfoPanel, InfoPanelKind};
 use crate::layout::{LayoutNode, SplitDirection};
 use crate::lsp::LspIncoming;
 use crate::picker::{Picker, PickerEvent};
@@ -25,7 +26,7 @@ use iced::{Element, Length, Subscription, Task, Theme, event, window};
 use lsp_types::notification::{DidOpenTextDocument, Initialized};
 use lsp_types::{DidOpenTextDocumentParams, InitializedParams};
 use smol::channel::Receiver;
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 const SCROLL_SPEED: f32 = 0.8;
 const COMPLETION_DEBOUNCE_MS: u64 = 150;
@@ -37,6 +38,9 @@ pub struct Remax {
     toast_manager: ToastManager,
     completions: Option<CompletionState>,
     completion_debounce: Option<Instant>,
+    info_panel: Option<InfoPanel>,
+    info_panel_focused: bool,
+    info_panel_ctrl_w: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +154,9 @@ impl Remax {
                 toast_manager: ToastManager::new(),
                 completions: None,
                 completion_debounce: None,
+                info_panel: None,
+                info_panel_focused: false,
+                info_panel_ctrl_w: false,
             },
             Task::none(),
         )
@@ -224,6 +231,15 @@ impl Remax {
                     return self.handle_picker_key(&key, &modifiers, text.as_deref());
                 }
 
+                if self.info_panel_focused {
+                    return self.handle_info_panel_key(
+                        &key,
+                        &modified_key,
+                        &modifiers,
+                        text.as_deref(),
+                    );
+                }
+
                 if self.completions.is_some() {
                     let intercept = Self::is_completion_key(&key, &modifiers);
                     if intercept {
@@ -244,8 +260,33 @@ impl Remax {
                     )
                 };
 
+                let mut handled_info_panel = false;
                 for action in &actions {
                     match action {
+                        EditorAction::LspHover => {
+                            self.handle_lsp_hover_action();
+                            handled_info_panel = true;
+                        }
+                        EditorAction::ShowDiagnosticHover => {
+                            self.handle_diagnostic_hover_action();
+                            handled_info_panel = true;
+                        }
+                        EditorAction::FocusDown
+                            if self.info_panel.is_some()
+                                && self.info_panel.as_ref().unwrap().pinned =>
+                        {
+                            let ws = self.editor.workspace();
+                            let has_neighbor = ws
+                                .layout
+                                .neighbor(ws.active_window, SplitDirection::Horizontal, true)
+                                .is_some();
+                            if !has_neighbor {
+                                self.info_panel_focused = true;
+                                handled_info_panel = true;
+                            } else {
+                                self.editor.execute(action.clone());
+                            }
+                        }
                         EditorAction::OpenBufferPicker
                         | EditorAction::OpenFilePicker { .. }
                         | EditorAction::OpenDiagnosticsPicker => {
@@ -264,6 +305,10 @@ impl Remax {
                     }
                 }
 
+                if !handled_info_panel && !actions.is_empty() {
+                    self.dismiss_preview_panel();
+                }
+
                 self.finalize_completions(&actions);
 
                 self.editor.update_search_cache();
@@ -271,6 +316,12 @@ impl Remax {
                 self.editor.ensure_syntax_current();
             }
             Message::ScrollLines { delta, window_id } => {
+                if window_id == 9999 {
+                    if let Some(panel) = &mut self.info_panel {
+                        panel.scroll_lines(delta, SCROLL_SPEED);
+                    }
+                    return Task::none();
+                }
                 let ws = self.editor.workspace_mut();
                 if window_id < ws.windows.len() {
                     let buf_id = ws.windows[window_id].buffer_id;
@@ -292,6 +343,9 @@ impl Remax {
                 }
             }
             Message::ScrollCols { delta, window_id } => {
+                if window_id == 9999 {
+                    return Task::none();
+                }
                 let ws = self.editor.workspace_mut();
                 if window_id < ws.windows.len() {
                     let buf_id = ws.windows[window_id].buffer_id;
@@ -304,6 +358,12 @@ impl Remax {
                 }
             }
             Message::ScrollbarJump { line, window_id } => {
+                if window_id == 9999 {
+                    if let Some(panel) = &mut self.info_panel {
+                        panel.scroll_to(line);
+                    }
+                    return Task::none();
+                }
                 let ws = self.editor.workspace_mut();
                 ws.active_window = window_id;
                 if window_id < ws.windows.len() {
@@ -320,6 +380,12 @@ impl Remax {
                 scroll_y,
                 window_id,
             } => {
+                if window_id == 9999 {
+                    if let Some(panel) = &mut self.info_panel {
+                        panel.scroll_to(scroll_y);
+                    }
+                    return Task::none();
+                }
                 let ws = self.editor.workspace_mut();
                 if window_id < ws.windows.len() {
                     let buf_id = ws.windows[window_id].buffer_id;
@@ -330,6 +396,13 @@ impl Remax {
                 }
             }
             Message::MouseClick { x, y, window_id } => {
+                if window_id == 9999 {
+                    if self.info_panel.is_some() && self.info_panel.as_ref().unwrap().pinned {
+                        self.info_panel_focused = true;
+                    }
+                    return Task::none();
+                }
+                self.info_panel_focused = false;
                 let ws = self.editor.workspace_mut();
                 ws.active_window = window_id;
                 if window_id < ws.windows.len() {
@@ -349,6 +422,12 @@ impl Remax {
                 cols,
                 window_id,
             } => {
+                if window_id == 9999 {
+                    if let Some(panel) = &mut self.info_panel {
+                        panel.resize(lines, cols);
+                    }
+                    return Task::none();
+                }
                 let mut resized = false;
                 {
                     let ws = self.editor.workspace_mut();
@@ -479,6 +558,10 @@ impl Remax {
                                         debug!("completion response received");
                                         self.handle_completion_response(result);
                                     }
+                                    "textDocument/hover" => {
+                                        debug!("hover response received");
+                                        self.handle_hover_response(result);
+                                    }
                                     _ => {
                                         debug!(method = %pending.method, "response matched pending request");
                                     }
@@ -486,7 +569,7 @@ impl Remax {
                             }
                         }
                         LspIncoming::Notification { method, params } => {
-                            debug!(?method, ?params, "got notification");
+                            debug!(?method, "got notification");
                             if method == "textDocument/publishDiagnostics"
                                 && let Some((buf_id, diags)) =
                                     crate::diagnostics::parse_publish_diagnostics(
@@ -494,7 +577,6 @@ impl Remax {
                                         &self.editor.buffers,
                                     )
                             {
-                                debug!(buf_id, count = diags.len(), "setting diagnostics");
                                 self.editor.diagnostics.set_for_buffer(buf_id, diags);
                             }
                         }
@@ -523,7 +605,7 @@ impl Remax {
                         }
                     }
                 }
-                debug!(server_id, message, "LSP message received in update");
+                trace!(server_id, message, "LSP message received in update");
             }
         }
         Task::none()
@@ -531,22 +613,47 @@ impl Remax {
 
     pub fn view(&self) -> Element<'_, Message> {
         let ws = self.editor.workspace();
-        let active_win_id = ws.active_window;
+        let active_win_id = if self.info_panel_focused {
+            usize::MAX // no editor window is active when info panel is focused
+        } else {
+            ws.active_window
+        };
 
-        let editor_area = self.build_layout_view(&ws.layout, ws, active_win_id);
+        let editor_area: Element<'_, Message> = if self.info_panel.is_some() {
+            container(self.build_layout_view(&ws.layout, ws, active_win_id))
+                .width(Length::Fill)
+                .height(Length::FillPortion(7))
+                .into()
+        } else {
+            self.build_layout_view(&ws.layout, ws, active_win_id)
+        };
 
-        let active_buf = self.editor.buffer();
-        let active_win = ws.window();
-        let (cursor_line, cursor_col) = active_buf.cursor_position(active_win.cursor);
+        let (modeline_buf_name, cursor_line, cursor_col, modified_indicator) =
+            if self.info_panel_focused {
+                if let Some(panel) = &self.info_panel {
+                    let (cl, cc) = panel.buffer.cursor_position(panel.window.cursor);
+                    (panel.buffer.name().to_string(), cl, cc, "")
+                } else {
+                    let active_buf = self.editor.buffer();
+                    let active_win = ws.window();
+                    let (cl, cc) = active_buf.cursor_position(active_win.cursor);
+                    let m = if active_buf.is_modified() { "[+]" } else { "" };
+                    (active_buf.name().to_string(), cl, cc, m)
+                }
+            } else {
+                let active_buf = self.editor.buffer();
+                let active_win = ws.window();
+                let (cl, cc) = active_buf.cursor_position(active_win.cursor);
+                let m = if active_buf.is_modified() { "[+]" } else { "" };
+                (active_buf.name().to_string(), cl, cc, m)
+            };
 
         let (mr, mg, mb) = self.vim.mode_color();
         let mode_label = text(format!(" {} ", self.vim.mode()))
             .size(14)
             .color(iced::Color::from_rgb(mr, mg, mb));
 
-        let modified_indicator = if active_buf.is_modified() { "[+]" } else { "" };
-
-        let buffer_name = text(format!(" {} {}", active_buf.name(), modified_indicator))
+        let buffer_name = text(format!(" {} {}", modeline_buf_name, modified_indicator))
             .size(14)
             .color(iced::Color::from_rgb(0.8, 0.8, 0.8));
 
@@ -557,7 +664,7 @@ impl Remax {
         let mut modeline_row = row![mode_label, buffer_name, Space::new().width(Length::Fill),]
             .align_y(iced::Alignment::Center);
 
-        let active_buf_id = active_win.buffer_id;
+        let active_buf_id = ws.window().buffer_id;
         let (error_count, warning_count) = self.editor.diagnostics.counts_for_buffer(active_buf_id);
         if error_count > 0 || warning_count > 0 {
             let mut diag_parts = row![].align_y(iced::Alignment::Center);
@@ -630,7 +737,16 @@ impl Remax {
             .into()
         };
 
-        let content = column![editor_area, modeline, bottom_section];
+        let content = if let Some(panel) = &self.info_panel {
+            column![
+                editor_area,
+                panel.view(self.info_panel_focused, self.vim.mode()),
+                modeline,
+                bottom_section
+            ]
+        } else {
+            column![editor_area, modeline, bottom_section]
+        };
 
         let main_ui = container(content)
             .width(Length::Fill)
@@ -976,6 +1092,151 @@ impl Remax {
             });
         }
         markers
+    }
+
+    fn handle_info_panel_key(
+        &mut self,
+        key: &keyboard::Key,
+        modified_key: &keyboard::Key,
+        modifiers: &keyboard::Modifiers,
+        text: Option<&str>,
+    ) -> Task<Message> {
+        use iced::keyboard::Key;
+
+        // We allow Ctrl-w h/j/k/l to switch focus
+        if self.info_panel_ctrl_w {
+            self.info_panel_ctrl_w = false;
+            if let Key::Character(ch) = modified_key {
+                match ch.as_str() {
+                    "k" | "h" | "l" | "j" => {
+                        self.info_panel_focused = false;
+                        return Task::none();
+                    }
+                    _ => {}
+                }
+            }
+            return Task::none();
+        }
+
+        if modifiers.control()
+            && let Key::Character(ch) = key
+            && ch.as_str() == "w"
+        {
+            self.info_panel_ctrl_w = true;
+            return Task::none();
+        }
+
+        // q closes the info panel
+        if self.vim.mode() == VimMode::Normal
+            && let Key::Character(ch) = modified_key
+            && ch.as_str() == "q"
+        {
+            self.info_panel = None;
+            self.info_panel_focused = false;
+            return Task::none();
+        }
+
+        let actions = if let Some(panel) = &self.info_panel {
+            self.vim.handle_key(
+                key,
+                modified_key,
+                modifiers,
+                text,
+                &panel.buffer,
+                panel.window.cursor,
+            )
+        } else {
+            return Task::none();
+        };
+
+        let entering_insert = actions
+            .iter()
+            .any(|a| matches!(a, EditorAction::SetMode(m) if m == "INSERT"));
+        if entering_insert {
+            self.vim.force_normal();
+            self.editor.status_message = String::from("Cannot edit read-only buffer");
+            return Task::none();
+        }
+
+        if let Some(panel) = &mut self.info_panel {
+            panel.execute_actions(&actions, &mut self.editor.registers);
+        }
+
+        Task::none()
+    }
+
+    fn handle_lsp_hover_action(&mut self) {
+        if let Some(panel) = &self.info_panel
+            && panel.kind == InfoPanelKind::LspHover
+        {
+            if !panel.pinned {
+                self.info_panel.as_mut().unwrap().pin();
+                self.info_panel_focused = true;
+                return;
+            } else {
+                self.info_panel = None;
+                self.info_panel_focused = false;
+                return;
+            }
+        }
+        let ws_idx = self.editor.active_workspace;
+        let win = self.editor.workspaces[ws_idx].window();
+        let cursor = win.cursor;
+        let buf_id = win.buffer_id;
+        let buf = &self.editor.buffers[buf_id];
+        if self.editor.workspaces[ws_idx]
+            .lsp_manager
+            .request_hover(buf, cursor)
+            .is_none()
+        {
+            self.editor.status_message = String::from("LSP not ready");
+        }
+    }
+
+    fn handle_diagnostic_hover_action(&mut self) {
+        if let Some(panel) = &self.info_panel
+            && panel.kind == InfoPanelKind::Diagnostic
+        {
+            if !panel.pinned {
+                self.info_panel.as_mut().unwrap().pin();
+                self.info_panel_focused = true;
+                return;
+            } else {
+                self.info_panel = None;
+                self.info_panel_focused = false;
+                return;
+            }
+        }
+        let ws = self.editor.workspace();
+        let win = ws.window();
+        let buf = &self.editor.buffers[win.buffer_id];
+        let (cursor_line, _) = buf.cursor_position(win.cursor);
+        let diags = self
+            .editor
+            .diagnostics
+            .for_line_range(win.buffer_id, cursor_line, cursor_line);
+        if diags.is_empty() {
+            self.editor.status_message = String::from("No diagnostics on this line");
+            return;
+        }
+        let content = crate::info_panel::format_diagnostics(diags);
+        self.info_panel = Some(InfoPanel::new(&content, InfoPanelKind::Diagnostic));
+    }
+
+    fn handle_hover_response(&mut self, result: serde_json::Value) {
+        if let Some(text) = crate::info_panel::parse_hover_response(&result) {
+            self.info_panel = Some(InfoPanel::new(&text, InfoPanelKind::LspHover));
+        } else {
+            self.editor.status_message = String::from("No hover information");
+        }
+    }
+
+    fn dismiss_preview_panel(&mut self) {
+        if let Some(panel) = &self.info_panel
+            && !panel.pinned
+        {
+            self.info_panel = None;
+        }
     }
 
     fn build_layout_view<'a>(

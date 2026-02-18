@@ -197,5 +197,8 @@ pub fn resolve(
         Command::SystemPaste => vec![EditorAction::SystemPaste],
 
         Command::PickerDiagnostics => vec![EditorAction::OpenDiagnosticsPicker],
+
+        Command::LspHover => vec![EditorAction::LspHover],
+        Command::DiagnosticHover => vec![EditorAction::ShowDiagnosticHover],
     }
 }

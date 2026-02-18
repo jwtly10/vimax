@@ -13,7 +13,7 @@ use smol::{
     lock::Mutex,
     spawn,
 };
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
@@ -114,14 +114,13 @@ impl LspServer {
         let body = serde_json::to_string(&request)?;
         let content_length = body.len();
         let message = format!("Content-Length: {}\r\n\r\n{}", content_length, body);
-        debug!(message, "sending notification to LSP server");
+        trace!(message, "sending notification to LSP server");
 
         let stdin_handle = Arc::clone(&self.stdin);
         spawn(async move {
             let mut stdin = stdin_handle.lock().await;
             stdin.write_all(message.as_bytes()).await.unwrap();
             stdin.flush().await.unwrap();
-            debug!("notification sent to LSP server");
         })
         .detach();
         Ok(())

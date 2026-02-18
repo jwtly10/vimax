@@ -118,6 +118,10 @@ pub enum Command {
 
     // Diagnostics
     PickerDiagnostics,
+
+    // Hover / Info panel
+    LspHover,
+    DiagnosticHover,
 }
 
 impl Command {
@@ -472,6 +476,8 @@ fn all_bindings() -> Vec<AnnotatedBinding> {
         NormalOnly => [KeyPress::char('n')]                 => Command::SearchNext,
         NormalOnly => [KeyPress::char('N')]                 => Command::SearchPrev,
         NormalOnly => [KeyPress::char('r')]                 => Command::EditReplaceChar,
+        NormalOnly => [KeyPress::char('K')]                 => Command::LspHover,
+        NormalOnly => [KeyPress::char('g'), KeyPress::char('t')] => Command::DiagnosticHover,
 
         // ── Visual only ─────────────────────────────────────────────────
         VisualOnly => [KeyPress::char('d')]                 => Command::VisualDelete,

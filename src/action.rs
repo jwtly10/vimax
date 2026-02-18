@@ -120,6 +120,32 @@ pub enum EditorAction {
         delete_backward: usize,
         insert_text: String,
     },
+    LspHover,
+    ShowDiagnosticHover,
+}
+
+impl EditorAction {
+    pub fn is_mutation(&self) -> bool {
+        matches!(
+            self,
+            EditorAction::InsertChar(_)
+                | EditorAction::InsertNewline
+                | EditorAction::InsertTab
+                | EditorAction::DeleteTillEndOfLine
+                | EditorAction::DeleteCharForward { .. }
+                | EditorAction::DeleteCharBackward
+                | EditorAction::DeleteLine { .. }
+                | EditorAction::DeleteRange(_)
+                | EditorAction::ChangeRange(_)
+                | EditorAction::ReplaceChar(_)
+                | EditorAction::Paste { .. }
+                | EditorAction::Undo
+                | EditorAction::Redo
+                | EditorAction::StartEditGroup
+                | EditorAction::FinishEditGroup
+                | EditorAction::LspApplyCompletion { .. }
+        )
+    }
 }
 
 pub enum EditorEffect {
