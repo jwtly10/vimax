@@ -31,7 +31,7 @@ use tracing::{debug, info, trace};
 const SCROLL_SPEED: f32 = 0.8;
 const COMPLETION_DEBOUNCE_MS: u64 = 150;
 
-pub struct Remax {
+pub struct Vimax {
     editor: Editor,
     vim: VimLayer,
     picker: Option<Picker>,
@@ -116,7 +116,7 @@ impl Recipe for LspSubscription {
         }))
     }
 }
-impl Remax {
+impl Vimax {
     pub fn theme(&self) -> Theme {
         Theme::Dark
     }
@@ -1358,7 +1358,7 @@ fn create_scratch_buffer() -> Buffer {
     buffer.set_name("*scratch*");
     buffer.insert_str(
         0,
-        "Welcome to remax.\n\nPress 'i' to enter insert mode.\nPress 'Esc' to return to normal mode.\nUse h/j/k/l to navigate.",
+        "Welcome to vimax.\n\nPress 'i' to enter insert mode.\nPress 'Esc' to return to normal mode.\nUse h/j/k/l to navigate.",
     );
     buffer
 }

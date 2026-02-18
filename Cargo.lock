@@ -2707,28 +2707,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a96887878f22d7bad8a3b6dc5b7440e0ada9a245242924394987b21cf2210a4c"
 
 [[package]]
-name = "remax"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arboard",
- "async-process",
- "iced",
- "ignore",
- "lsp-types",
- "nucleo-matcher",
- "ropey",
- "serde_json",
- "smol",
- "smol_str",
- "tracing",
- "tracing-subscriber",
- "tree-house",
- "tree-house-bindings",
- "tree-sitter-rust",
-]
-
-[[package]]
 name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3509,6 +3487,28 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vimax"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "async-process",
+ "iced",
+ "ignore",
+ "lsp-types",
+ "nucleo-matcher",
+ "ropey",
+ "serde_json",
+ "smol",
+ "smol_str",
+ "tracing",
+ "tracing-subscriber",
+ "tree-house",
+ "tree-house-bindings",
+ "tree-sitter-rust",
+]
 
 [[package]]
 name = "walkdir"

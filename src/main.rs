@@ -21,23 +21,23 @@ mod vim;
 mod window;
 mod workspace;
 
-use app::Remax;
+use app::Vimax;
 use tracing::info;
 
 fn main() -> iced::Result {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("remax=debug")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("vimax=debug")),
         )
         .with_writer(std::io::stderr)
         .init();
 
-    info!("remax starting");
+    info!("vimax starting");
 
-    iced::application(Remax::boot, Remax::update, Remax::view)
-        .subscription(Remax::subscription)
-        .theme(Remax::theme)
+    iced::application(Vimax::boot, Vimax::update, Vimax::view)
+        .subscription(Vimax::subscription)
+        .theme(Vimax::theme)
         .exit_on_close_request(false)
         .run()
 }

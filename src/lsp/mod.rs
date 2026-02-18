@@ -264,7 +264,7 @@ impl LspManager {
             root_uri: Some(server.root_uri.clone()), // TODO: Should be using workspace_folders ?
             capabilities: ClientCapabilities::default(),
             client_info: Some(ClientInfo {
-                name: "remax".to_string(),
+                name: "vimax".to_string(),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
             }),
             ..Default::default()
