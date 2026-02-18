@@ -252,6 +252,29 @@ impl Buffer {
         }
     }
 
+    pub fn delete_word_backward(&mut self, cursor: usize) -> usize {
+        if cursor == 0 {
+            return cursor;
+        }
+        let mut pos = cursor;
+        // Skip whitespace backward
+        while pos > 0 && self.rope.char(pos - 1).is_whitespace() {
+            pos -= 1;
+        }
+        // Skip word chars backward
+        while pos > 0 && !self.rope.char(pos - 1).is_whitespace() {
+            pos -= 1;
+        }
+        if pos < cursor {
+            let deleted: String = self.rope.slice(pos..cursor).into();
+            self.rope.remove(pos..cursor);
+            self.modified = true;
+            self.version += 1;
+            self.undo_stack.record_delete(pos, &deleted);
+        }
+        pos
+    }
+
     pub fn delete_till_eol(&mut self, cursor: usize) -> usize {
         let line_idx = self.rope.char_to_line(cursor);
         let line_start = self.rope.line_to_char(line_idx);

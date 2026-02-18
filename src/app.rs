@@ -874,6 +874,9 @@ impl Remax {
                         self.completions = None;
                     }
                 }
+                EditorAction::DeleteWordBackward => {
+                    self.completions = None;
+                }
                 _ => {}
             }
         }

@@ -83,6 +83,7 @@ pub fn resolve(
         }
 
         Command::InsertBackspace => vec![EditorAction::DeleteCharBackward],
+        Command::InsertDeleteWordBackward => vec![EditorAction::DeleteWordBackward],
         Command::InsertDelete => vec![EditorAction::DeleteCharForward { count: 1 }],
         Command::InsertNewline => vec![EditorAction::InsertNewline],
         Command::InsertTab => vec![EditorAction::InsertTab],

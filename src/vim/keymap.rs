@@ -41,6 +41,7 @@ pub enum Command {
     // Insert-mode editing
     InsertBackspace,
     InsertDelete,
+    InsertDeleteWordBackward,
     InsertNewline,
     InsertTab,
 
@@ -494,6 +495,7 @@ fn all_bindings() -> Vec<AnnotatedBinding> {
         InsertOnly => [KeyPress::named(Named::Delete)]      => Command::InsertDelete,
         InsertOnly => [KeyPress::named(Named::Enter)]       => Command::InsertNewline,
         InsertOnly => [KeyPress::named(Named::Tab)]         => Command::InsertTab,
+        InsertOnly => [KeyPress::named(Named::Backspace).alt()]   => Command::InsertDeleteWordBackward,
         InsertOnly => [KeyPress::named(Named::ArrowLeft).alt()]  => Command::CursorMoveWordBackward,
         InsertOnly => [KeyPress::named(Named::ArrowRight).alt()] => Command::CursorMoveWordForward,
     }

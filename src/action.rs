@@ -49,6 +49,7 @@ pub enum EditorAction {
         count: usize,
     },
     DeleteCharBackward,
+    DeleteWordBackward,
     DeleteLine {
         count: usize,
     },
@@ -134,6 +135,7 @@ impl EditorAction {
                 | EditorAction::DeleteTillEndOfLine
                 | EditorAction::DeleteCharForward { .. }
                 | EditorAction::DeleteCharBackward
+                | EditorAction::DeleteWordBackward
                 | EditorAction::DeleteLine { .. }
                 | EditorAction::DeleteRange(_)
                 | EditorAction::ChangeRange(_)

@@ -171,6 +171,9 @@ pub fn execute_core(
         EditorAction::DeleteCharBackward => {
             win.cursor = buf.delete_char_backward(win.cursor);
         }
+        EditorAction::DeleteWordBackward => {
+            win.cursor = buf.delete_word_backward(win.cursor);
+        }
         EditorAction::DeleteLine { count } => {
             for _ in 0..*count {
                 win.cursor = buf.delete_line(win.cursor);
